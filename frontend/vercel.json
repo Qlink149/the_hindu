@@ -3,9 +3,11 @@
   "buildCommand": "npm run build",
   "outputDirectory": "build",
   "framework": "create-react-app",
+  "installCommand": "npm install --legacy-peer-deps",
   "build": {
     "env": {
-      "DISABLE_ESLINT_PLUGIN": "true"
+      "DISABLE_ESLINT_PLUGIN": "true",
+      "REACT_APP_BACKEND_URL": "https://the-hindu-api.onrender.com"
     }
   },
   "rewrites": [
