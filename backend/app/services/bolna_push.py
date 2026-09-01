@@ -64,6 +64,12 @@ def bolna_user_data(lead: Dict[str, Any], customer_name: str) -> Dict[str, str]:
     project = str(lead.get("project") or "").strip()
     if project:
         data["project"] = project
+    batch_id = str(lead.get("upload_batch_id") or "").strip()
+    if batch_id:
+        data["upload_batch_id"] = batch_id
+    batch_name = str(lead.get("upload_batch_name") or "").strip()
+    if batch_name:
+        data["upload_batch_name"] = batch_name
     return data
 
 

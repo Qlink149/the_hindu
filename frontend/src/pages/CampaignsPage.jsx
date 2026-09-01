@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { navigateToVirtualCustomer } from "../lib/featureAccess";
+import { buildAICallingPath, LIVE_STATUS_TO_CALL_STATUS } from "../lib/aiCallingLinks";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import {
@@ -169,7 +169,7 @@ const CampaignsPage = () => {
       );
       return;
     }
-    loadAll({ refreshStats: false });
+    loadAll({ refreshStats: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -273,7 +273,7 @@ const CampaignsPage = () => {
     setRefreshingMain(true);
     setError(null);
     try {
-      await fetchCampaign(false);
+      await fetchCampaign(true);
       await fetchUploadHistory();
       await fetchEligibleFutworkCount();
       setLastUpdatedAt(new Date());
@@ -482,7 +482,15 @@ const CampaignsPage = () => {
               <Button
                 variant="outline"
                 className="border-white/10 text-white hover:bg-white/5"
-                onClick={() => navigate("/ai-calling")}
+                onClick={() => {
+                  const latest = uploadHistory[0];
+                  navigate(
+                    buildAICallingPath({
+                      uploadBatchId: latest?.id,
+                      batchName: latest?.batch_name || latest?.filename,
+                    })
+                  );
+                }}
               >
                 <PhoneCall className="h-4 w-4 mr-2" />
                 Call History
@@ -598,7 +606,14 @@ const CampaignsPage = () => {
                   {LIVE_LABELS.map(({ key, label }) => (
                     <li
                       key={key}
-                      className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-4 py-3"
+                      className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-4 py-3 cursor-pointer hover:border-[#C5A059]/40 hover:bg-white/[0.04] transition-colors"
+                      onClick={() =>
+                        navigate(
+                          buildAICallingPath({
+                            status: LIVE_STATUS_TO_CALL_STATUS[key],
+                          })
+                        )
+                      }
                     >
                       <span className="text-[#A3A3A3] text-sm">{label}</span>
                       <span className="text-xl font-semibold text-white tabular-nums">
@@ -803,9 +818,11 @@ const CampaignsPage = () => {
                                   type="button"
                                   className="text-left hover:text-[#C5A059] underline-offset-2 hover:underline truncate max-w-full"
                                   onClick={() =>
-                                    navigateToVirtualCustomer(
-                                      navigate,
-                                      `/virtual-customer?campaignId=${encodeURIComponent(row.id)}`
+                                    navigate(
+                                      buildAICallingPath({
+                                        uploadBatchId: row.id,
+                                        batchName: row.batch_name || row.filename,
+                                      })
                                     )
                                   }
                                 >

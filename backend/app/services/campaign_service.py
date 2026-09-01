@@ -279,12 +279,9 @@ class CampaignService:
 
     _FUTWORK_FILTER_BATCHES_QUERY: Dict[str, Any] = {
         "$or": [
+            {"source": "csv_upload"},
+            {"source": "bulk_push"},
             {"futwork_pushed": {"$gt": 0}},
-            {
-                "source": "bulk_push",
-                "status": "completed",
-                "futwork_pushed": {"$gt": 0},
-            },
         ]
     }
 
@@ -320,14 +317,13 @@ class CampaignService:
             if not uid:
                 continue
             pushed = int(doc.get("futwork_pushed") or 0)
-            if pushed <= 0:
-                continue
+            processed = int(doc.get("processed") or 0)
             name = (doc.get("batch_name") or doc.get("filename") or str(uid)).strip()
             out.append(
                 {
                     "id": str(uid),
                     "name": name[:200],
-                    "count": pushed,
+                    "count": pushed or processed,
                 }
             )
         return out

@@ -258,7 +258,7 @@ const AICallingPage = () => {
   const [showCallDetail, setShowCallDetail] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, flushSearch] = useDebouncedValue(searchQuery, 400, { minLength: 2 });
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "all");
   const [dispositionFilter, setDispositionFilter] = useState(
     searchParams.get("disposition") || "all"
   );
@@ -289,6 +289,10 @@ const AICallingPage = () => {
     if (q) setSearchQuery(q);
     if (searchParams.get("disposition")) setDispositionFilter(searchParams.get("disposition"));
     if (searchParams.get("agent_id")) setAgentFilter(searchParams.get("agent_id"));
+    if (searchParams.get("status")) setStatusFilter(searchParams.get("status"));
+    setUploadBatchFilter(
+      searchParams.get("upload_batch_id") || searchParams.get("campaignId") || "all"
+    );
 
     const startDate = searchParams.get("start_date");
     const endDate = searchParams.get("end_date");
@@ -473,6 +477,22 @@ const AICallingPage = () => {
     new Set([...(dispositionOptions || []), ...fallbackDispositions])
   );
 
+  const batchOptions = useMemo(() => {
+    const list = Array.isArray(uploadBatches) ? [...uploadBatches] : [];
+    if (
+      uploadBatchFilter &&
+      uploadBatchFilter !== "all" &&
+      !list.some((batch) => batch.id === uploadBatchFilter)
+    ) {
+      list.unshift({
+        id: uploadBatchFilter,
+        name: searchParams.get("batch_name") || "Selected batch",
+        count: 0,
+      });
+    }
+    return list;
+  }, [uploadBatches, uploadBatchFilter, searchParams]);
+
   const handleResetFilters = useCallback(() => {
     setSelectedCampaign("all");
     setStatusFilter("all");
@@ -480,6 +500,7 @@ const AICallingPage = () => {
     setSearchQuery("");
     setDateRange(null);
     setAgentFilter("all");
+    setUploadBatchFilter("all");
   }, []);
 
   const handleClearDateRange = useCallback(() => {
@@ -510,7 +531,13 @@ const AICallingPage = () => {
             AI Calling Engine
           </h1>
           <p className="text-[#A1A1AA]">
-            Live record of every AI-placed call for The Hindu campaigns
+            {uploadBatchFilter !== "all"
+              ? `Calls for ${
+                  batchOptions.find((b) => b.id === uploadBatchFilter)?.name ||
+                  searchParams.get("batch_name") ||
+                  "this campaign batch"
+                }`
+              : "Live record of every AI-placed call for The Hindu campaigns"}
           </p>
           <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <AgentSelect
@@ -610,16 +637,17 @@ const AICallingPage = () => {
                   testId="agent-filter-select"
                 />
 
-                {uploadBatches.length > 0 && (
+                {batchOptions.length > 0 && (
                   <Select value={uploadBatchFilter} onValueChange={setUploadBatchFilter}>
                     <SelectTrigger className="w-[220px] bg-[#1A1A1A] border-white/10 text-white">
                       <SelectValue placeholder="All Batches" />
                     </SelectTrigger>
                     <SelectContent className="bg-[#1A1A1A] border-white/10">
                       <SelectItem value="all">All Batches</SelectItem>
-                      {uploadBatches.map((b) => (
+                      {batchOptions.map((b) => (
                         <SelectItem key={b.id} value={b.id}>
-                          {b.name} ({b.count} synced)
+                          {b.name}
+                          {b.count ? ` (${b.count})` : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>

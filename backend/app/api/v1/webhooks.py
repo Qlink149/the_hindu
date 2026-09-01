@@ -76,6 +76,8 @@ _LEAD_RESOLVE_PROJECTION = {
     "last_call_status": 1,
     "futwork_lead_id": 1,
     "assigned_user_id": 1,
+    "upload_batch_id": 1,
+    "upload_batch_name": 1,
 }
 
 
@@ -207,9 +209,9 @@ def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     if duration in (None, ""):
         duration = raw.get("conversation_duration") or raw.get("conversationDuration") or 0
     campaign_id = _first_str(
+        settings.calling_campaign_id,
         raw.get("batch_id"),
         raw.get("batchId"),
-        settings.calling_campaign_id,
     )
     lead_id = _first_str(
         recipient_data.get("lead_id"),
@@ -380,6 +382,18 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
     }
     if webhook_futwork_id:
         set_fields["futwork_lead_id"] = webhook_futwork_id
+    upload_batch_id = _first_str(
+        recipient_data.get("upload_batch_id"),
+        (existing_lead or {}).get("upload_batch_id"),
+    )
+    upload_batch_name = _first_str(
+        recipient_data.get("upload_batch_name"),
+        (existing_lead or {}).get("upload_batch_name"),
+    )
+    if upload_batch_id:
+        set_fields["upload_batch_id"] = upload_batch_id
+    if upload_batch_name:
+        set_fields["upload_batch_name"] = upload_batch_name
     # Only regress futwork_status/status if we are NOT in a stale-intermediate
     # case (otherwise a delayed `in-progress` after `completed` would corrupt
     # the terminal record).

@@ -331,10 +331,13 @@ def _call_history_filter_query(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     agent_id: Optional[str] = None,
+    extra_clause: Optional[Dict[str, Any]] = None,
     *,
     lead_id_clause: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     parts: List[Dict[str, Any]] = []
+    if extra_clause:
+        parts.append(extra_clause)
     if upload_batch_id and upload_batch_id != "all":
         parts.append({"upload_batch_id": upload_batch_id})
     if lead_id_clause is not None:
@@ -372,6 +375,25 @@ def _call_history_filter_query(
         parts.append(date_clause)
 
     return _and_queries(*parts)
+
+
+async def _upload_batch_call_clause(db, upload_batch_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Match calls tagged with this batch, or calls whose lead belongs to it."""
+    uid = (upload_batch_id or "").strip()
+    if not uid or uid == "all":
+        return None
+    ors: List[Dict[str, Any]] = [{"upload_batch_id": uid}]
+    try:
+        lead_ids = [
+            str(x)
+            for x in await db.leads.distinct("id", {"upload_batch_id": uid})
+            if x
+        ]
+    except Exception:
+        lead_ids = []
+    if lead_ids:
+        ors.append({"lead_id": {"$in": lead_ids}})
+    return ors[0] if len(ors) == 1 else {"$or": ors}
 
 
 def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -462,12 +484,13 @@ async def get_call_history_summary(
     """Aggregated KPIs for call_history matching the same filters as the list endpoint."""
     try:
         lead_clause = await _call_history_lead_id_clause(db, leadId) if leadId else None
+        batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
         base = _call_history_filter_query(
             campaign,
             status,
             disposition,
             q,
-            upload_batch_id=upload_batch_id,
+            extra_clause=batch_clause,
             lead_id=leadId,
             mobile_digits=mobile_digits,
             start_date=start_date,
@@ -538,12 +561,13 @@ async def get_call_history_ai_batch_summary(
     Returns a shape compatible with the frontend \"Batch Summary\" view.
     """
     try:
+        batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
         base = _call_history_filter_query(
             campaign,
             status,
             disposition,
             q,
-            upload_batch_id=upload_batch_id,
+            extra_clause=batch_clause,
             start_date=start_date,
             end_date=end_date,
             agent_id=agent_id,
@@ -672,12 +696,13 @@ async def get_call_history(
     """
     try:
         lead_clause = await _call_history_lead_id_clause(db, leadId) if leadId else None
+        batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
         ch_query = _call_history_filter_query(
             campaign,
             status,
             disposition,
             q,
-            upload_batch_id=upload_batch_id,
+            extra_clause=batch_clause,
             lead_id=leadId,
             mobile_digits=mobile_digits,
             start_date=start_date,
