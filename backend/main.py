@@ -86,12 +86,12 @@ async def shutdown_db_client():
     await close_mongo_connection()
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "ok", "service": "hindu-sales-api"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     calling = {
         "provider": "bolna" if settings.bolna_enabled else ("futwork" if settings.futwork_enabled else None),
