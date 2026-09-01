@@ -4,20 +4,14 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 import {
-  mapLeadSources,
-  mapStatusBreakdown,
   mapDispositionBreakdown,
   parseProjectsPayload,
   buildStatsParams,
   buildAICallingDrillParams,
   formatDashboardNumber,
-  REGIONAL_COLORS,
-  mapAvgDurationBreakdown,
 } from "../lib/adapters/dashboardAdapter";
-import ChartTooltip from "../components/shared/ChartTooltip";
 import { DashboardSkeleton } from "../components/feedback/Skeletons";
 import { LoadingOverlay, FetchError } from "../components/loading";
-import { formatDuration } from "../lib/formatDuration";
 import {
   Users,
   Crown,
@@ -31,23 +25,13 @@ import {
   Sun,
 } from "lucide-react";
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
+  ResponsiveContainer,
+  Tooltip,
 } from "recharts";
-import {
-  BRAND_CHART_AXIS,
-  BRAND_CHART_CURSOR,
-  BRAND_CHART_GRID,
-  BRAND_COLORS,
-} from "../components/charts/brandChartTheme";
+import { BRAND_COLORS } from "../components/charts/brandChartTheme";
 import { Button } from "../components/ui/button";
 import {
   DropdownMenu,
@@ -198,8 +182,6 @@ const DashboardPage = () => {
     );
   };
 
-  const leadSources = useMemo(() => mapLeadSources(stats), [stats]);
-  const durationData = useMemo(() => mapAvgDurationBreakdown(stats), [stats]);
   const dispositionData = useMemo(() => mapDispositionBreakdown(stats), [stats]);
   const displayProjects = useMemo(() => {
     const otherProjectCard =
@@ -453,7 +435,7 @@ const DashboardPage = () => {
                 ))}
               </motion.div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 gap-6">
                 {dispositionData.length > 0 ? (
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
@@ -517,45 +499,6 @@ const DashboardPage = () => {
                     No disposition data available
                   </div>
                 )}
-
-                <motion.div
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.3 }}
-                  className="glass-card rounded-lg p-6"
-                  data-testid="avg-duration-chart"
-                >
-                  <h3 className="font-serif text-xl text-white mb-2">Avg call duration (in sec)</h3>
-                  <p className="text-[#737373] text-xs mb-4">Average duration of calls by disposition</p>
-                  <div className="flex items-center justify-center">
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={durationData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={BRAND_CHART_GRID} horizontal={false} />
-                        <XAxis type="number" stroke={BRAND_CHART_AXIS} tickFormatter={(v) => `${v}s`} />
-                        <YAxis dataKey="name" type="category" stroke={BRAND_CHART_AXIS} width={120} tick={{ fontSize: 12 }} />
-                        <Tooltip
-                          cursor={{ fill: BRAND_CHART_CURSOR }}
-                          content={({ active, payload }) => {
-                            if (active && payload?.length) {
-                              return (
-                                <div className="rounded-xl border border-[rgb(var(--navy-rgb)/0.09)] bg-white p-3 shadow-xl">
-                                  <p className="mb-1 font-medium text-[var(--executive-accent)]">{payload[0].payload.name}</p>
-                                  <p className="text-[var(--executive-text-strong)]">Avg Duration: {formatDuration(payload[0].value)} ({payload[0].value}s)</p>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
-                        <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                          {durationData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </motion.div>
               </div>
 
 
