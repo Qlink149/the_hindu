@@ -1,0 +1,573 @@
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
+from typing import Any, List, Optional
+import logging
+import re
+import uuid
+import pandas as pd
+import io
+from datetime import datetime
+from ...core.config import settings
+from ...core.database import get_db
+from ...core.rbac import require_admin
+from ...core.security import get_current_user
+from ...services.lead_service import LeadService
+from ...services.lead_upload_service import schedule_lead_csv_upload_job
+from ...services.qualification_buckets import VALID_DASHBOARD_BUCKETS
+from ...models.campaign import LeadUploadStartResponse, LeadUploadStatusResponse
+from ...services.assignment_service import AssignmentService, rep_lead_filter
+from ...models.lead import LeadDetail
+from ...core.time_utils import serialize_datetime_utc
+from ...core.preview_access import (
+    assert_lead_preview_access,
+    assert_vc_list_blocked,
+    assert_vc_mutations_blocked,
+    is_vc_preview_tier,
+    preview_disposition,
+)
+from ...utils.lead_call_history import build_lead_call_history_query
+from ...services.structured_ai_service import NOT_WORTHY_MESSAGE
+
+logger = logging.getLogger(__name__)
+
+
+def _call_timestamp(doc: dict) -> Any:
+    return doc.get("started_at") or doc.get("created_at") or doc.get("call_date")
+
+
+def _serialize_call_timestamps(doc: dict) -> tuple:
+    ts = _call_timestamp(doc)
+    iso = serialize_datetime_utc(ts)
+    return iso, iso
+router = APIRouter()
+
+SALES_QUALIFICATION_VALUES = frozenset(
+    {"Cold Qualified", "Hot Lead", "Warm Lead"}
+)
+
+
+def _build_list_filters(
+    *,
+    budget_category=None,
+    location_category=None,
+    intent_category=None,
+    temperature=None,
+    qualification_category=None,
+    project=None,
+    campaign_id=None,
+    campaignId=None,
+    disposition=None,
+    status=None,
+    assigned_user_id=None,
+    assigned_rep=None,
+    sales_qualification=None,
+    futwork_sync_status=None,
+    dashboard_bucket=None,
+    days=None,
+    start_date=None,
+    end_date=None,
+):
+    bucket_key = (dashboard_bucket or "").strip().lower()
+    use_bucket = bucket_key in VALID_DASHBOARD_BUCKETS
+
+    filters = {
+        "budget_category": budget_category,
+        "location_category": location_category,
+        "intent_category": intent_category,
+    }
+    if not use_bucket:
+        filters["temperature"] = temperature
+        filters["qualification_category"] = qualification_category
+    else:
+        filters["dashboard_bucket"] = bucket_key
+    if days is not None:
+        filters["days"] = days
+    if start_date:
+        filters["start_date"] = start_date
+    if end_date:
+        filters["end_date"] = end_date
+    if project and project != "all":
+        filters["project"] = project
+    batch_id = campaignId or None
+    if batch_id:
+        filters["upload_batch_id"] = batch_id
+    elif campaign_id:
+        filters["campaign_id"] = campaign_id
+    if disposition:
+        filters["disposition"] = disposition
+    if status:
+        filters["status"] = status
+    if assigned_user_id:
+        filters["assigned_user_id"] = assigned_user_id
+    if sales_qualification:
+        filters["sales_qualification"] = sales_qualification
+    if assigned_rep:
+        filters["assigned_rep"] = assigned_rep
+    fw = (futwork_sync_status or "").strip().lower()
+    if fw and fw != "all":
+        filters["futwork_sync_status"] = futwork_sync_status
+    elif not futwork_sync_status:
+        filters["futwork_sync_status"] = {"$not": {"$eq": "failed"}}
+    return filters
+
+
+@router.get("", response_model=List[LeadDetail])
+async def list_leads(
+    skip: int = 0,
+    limit: int = 50,
+    search: Optional[str] = None,
+    budget_category: Optional[str] = None,
+    location_category: Optional[str] = None,
+    intent_category: Optional[str] = None,
+    temperature: Optional[str] = None,
+    qualification_category: Optional[str] = None,
+    project: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    disposition: Optional[str] = None,
+    status: Optional[str] = None,
+    assigned_user_id: Optional[str] = None,
+    assigned_rep: Optional[str] = None,
+    sales_qualification: Optional[str] = None,
+    futwork_sync_status: Optional[str] = None,
+    dashboard_bucket: Optional[str] = None,
+    days: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    assert_vc_list_blocked()
+    service = LeadService(db)
+    filters = _build_list_filters(
+        budget_category=budget_category,
+        location_category=location_category,
+        intent_category=intent_category,
+        temperature=temperature,
+        qualification_category=qualification_category,
+        project=project,
+        campaign_id=campaign_id,
+        campaignId=campaignId,
+        disposition=disposition,
+        status=status,
+        assigned_user_id=assigned_user_id,
+        assigned_rep=assigned_rep,
+        sales_qualification=sales_qualification,
+        futwork_sync_status=futwork_sync_status,
+        dashboard_bucket=dashboard_bucket,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    role = (current_user.get("role") or "sales").lower()
+    query = service._build_leads_query(search, filters)
+    if role == "sales":
+        rep_filter = rep_lead_filter(current_user["id"], current_user["full_name"])
+        query = {"$and": [query, rep_filter]} if query else rep_filter
+    return await service.find_leads_by_query(query, skip, limit)
+
+
+@router.get("/count/all")
+async def get_leads_count(
+    budget_category: Optional[str] = None,
+    location_category: Optional[str] = None,
+    intent_category: Optional[str] = None,
+    temperature: Optional[str] = None,
+    qualification_category: Optional[str] = None,
+    project: Optional[str] = None,
+    search: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    disposition: Optional[str] = None,
+    status: Optional[str] = None,
+    assigned_user_id: Optional[str] = None,
+    assigned_rep: Optional[str] = None,
+    sales_qualification: Optional[str] = None,
+    futwork_sync_status: Optional[str] = None,
+    dashboard_bucket: Optional[str] = None,
+    days: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    if is_vc_preview_tier():
+        disp = (disposition or "").strip().lower()
+        if disp != preview_disposition().lower():
+            assert_vc_list_blocked()
+    service = LeadService(db)
+    filters = _build_list_filters(
+        budget_category=budget_category,
+        location_category=location_category,
+        intent_category=intent_category,
+        temperature=temperature,
+        qualification_category=qualification_category,
+        project=project,
+        campaign_id=campaign_id,
+        campaignId=campaignId,
+        disposition=disposition,
+        status=status,
+        assigned_user_id=assigned_user_id,
+        assigned_rep=assigned_rep,
+        sales_qualification=sales_qualification,
+        futwork_sync_status=futwork_sync_status,
+        dashboard_bucket=dashboard_bucket,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    role = (current_user.get("role") or "sales").lower()
+    query = service._build_leads_query(search, filters)
+    if role == "sales":
+        rep_filter = rep_lead_filter(current_user["id"], current_user["full_name"])
+        query = {"$and": [query, rep_filter]} if query else rep_filter
+    count = await service.count_by_query(query)
+    return {"count": count}
+
+
+@router.delete("/clear")
+async def clear_all_leads(db = Depends(get_db)):
+    try:
+        result = await db.leads.delete_many({})
+        return {"success": True, "deleted_count": result.deleted_count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error clearing leads")
+
+
+@router.get("/{lead_id}", response_model=LeadDetail)
+async def get_lead(lead_id: str, current_user: dict = Depends(get_current_user), db = Depends(get_db)):
+    await assert_lead_preview_access(db, lead_id, current_user)
+    service = LeadService(db)
+    lead = await service.get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    # Repair alias field for frontend compatibility (non-destructive)
+    try:
+        await service.ensure_residential_alias(lead_id)
+        lead = await service.get_lead_by_id(lead_id) or lead
+    except Exception:
+        logger.exception("Failed to ensure residential alias | lead_id=%s", lead_id)
+    return lead
+
+
+@router.get("/{lead_id}/calls")
+async def get_lead_calls(lead_id: str, current_user: dict = Depends(get_current_user), db = Depends(get_db)):
+    """Return all call entries linked to this lead (from call_history + leads collections)."""
+    await assert_lead_preview_access(db, lead_id, current_user)
+    # Find lead by its UUID 'id' field
+    lead = await db.leads.find_one({"id": lead_id}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    mobile_digits = lead.get("mobile_digits", "").strip()
+
+    calls = []
+
+    # 1. Query dedicated call_history collection (lead-linked + matching customer phone)
+    history_docs = await db.call_history.find(
+        build_lead_call_history_query(lead_id, lead),
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(50)
+
+    for d in history_docs:
+        se = d.get("structured_extraction") or {}
+        ai_summary = ""
+        if isinstance(se, dict) and se.get("call_summary"):
+            ai_summary = str(se.get("call_summary"))
+        elif d.get("extracted_data"):
+            ai_summary = (d.get("extracted_data") or {}).get("call_summary", "") or ""
+        created_iso, call_iso = _serialize_call_timestamps(d)
+        ai_worthy = d.get("ai_worthy") is not False
+        if not ai_worthy and ai_summary and ai_summary.strip() != NOT_WORTHY_MESSAGE:
+            ai_worthy = True
+        calls.append({
+            "lead_id": lead_id,
+            "call_sid": d.get("id") or d.get("call_sid") or "",
+            "created_at": created_iso,
+            "call_date": call_iso,
+            "status": d.get("status", ""),
+            "disposition": d.get("disposition", ""),
+            "duration": int(d.get("duration", 0) or 0),
+            "recording_url": d.get("recording_url", ""),
+            "transcript": d.get("transcript", ""),
+            "ai_call_summary": ai_summary,
+            "ai_worthy": ai_worthy,
+            "campaign": d.get("campaign", ""),
+            "structured_extraction": se if isinstance(se, dict) else {},
+        })
+
+    # 2. Also check leads collection for embedded call data (from webhook upserts to leads doc)
+    if not calls and mobile_digits:
+        lead_call_docs = await db.leads.find(
+            {
+                "mobile_digits": mobile_digits,
+                "$or": [
+                    {"call_status": {"$nin": ["", None]}},
+                    {"recording_url": {"$nin": ["", None]}},
+                    {"transcript": {"$nin": ["", None]}},
+                ]
+            },
+            {"_id": 0}
+        ).sort("call_date", -1).to_list(50)
+
+        for d in lead_call_docs:
+            if not (d.get("call_status") or d.get("recording_url") or d.get("transcript")):
+                continue
+            created_iso, call_iso = _serialize_call_timestamps(d)
+            calls.append({
+                "lead_id": d.get("id", lead_id),
+                "call_sid": "",
+                "created_at": created_iso,
+                "call_date": call_iso,
+                "status": d.get("call_status", ""),
+                "disposition": d.get("disposition", ""),
+                "duration": int(d.get("call_duration", 0) or d.get("last_call_duration", 0) or 0),
+                "recording_url": d.get("recording_url", ""),
+                "transcript": d.get("transcript", ""),
+                "ai_call_summary": d.get("lastCallSummary", ""),
+                "ai_worthy": True,
+                "campaign": d.get("campaign_name", ""),
+                "structured_extraction": {},
+            })
+
+    return {"calls": calls}
+
+
+def _default_batch_name(filename: Optional[str]) -> str:
+    base = (filename or "upload.csv").rsplit(".", 1)[0].strip() or "upload"
+    return base[:200]
+
+
+@router.post("/upload", response_model=LeadUploadStartResponse, status_code=202)
+async def upload_leads(
+    file: UploadFile = File(...),
+    batch_name: Optional[str] = Query(None),
+    push_to_futwork: bool = Query(True),
+    db = Depends(get_db),
+):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+
+    # ---- Size guardrail -----------------------------------------------------
+    max_bytes = int(settings.LEAD_UPLOAD_MAX_BYTES or 0)
+    content = await file.read()
+    if max_bytes > 0 and len(content) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"CSV is too large ({len(content)} bytes). "
+                f"Maximum allowed is {max_bytes} bytes."
+            ),
+        )
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded CSV is empty")
+
+    upload_id = str(uuid.uuid4())
+    resolved_batch = (batch_name or "").strip() or _default_batch_name(file.filename)
+    resolved_batch = re.sub(r"\s+", " ", resolved_batch).strip()[:200]
+
+    # ---- Cloudinary raw upload (required when configured) -----------------
+    original_csv_secure_url = ""
+    original_csv_public_id = ""
+    try:
+        from ...utils.cloudinary_csv import upload_lead_csv_raw
+
+        upload_result = await upload_lead_csv_raw(
+            content,
+            batch_label=resolved_batch,
+            upload_id=upload_id,
+        )
+        original_csv_secure_url = str(upload_result.get("secure_url") or "")
+        original_csv_public_id = str(upload_result.get("public_id") or "")
+    except RuntimeError as e:
+        logger.error("CSV storage unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="CSV storage is not configured. Set CLOUDINARY_URL on the server.",
+        )
+    except Exception as e:
+        logger.exception("Cloudinary upload failed")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not store CSV file: {e!s}",
+        )
+
+    # ---- Parse with encoding fallback --------------------------------------
+    try:
+        df = pd.read_csv(io.BytesIO(content))
+    except UnicodeDecodeError:
+        try:
+            df = pd.read_csv(io.BytesIO(content), encoding="latin-1")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid CSV encoding: {e}")
+    except pd.errors.EmptyDataError:
+        raise HTTPException(status_code=400, detail="CSV has no parseable rows")
+    except Exception as e:
+        logger.error(f"Failed to parse CSV file | Error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Invalid CSV: {e}")
+
+    rows = df.to_dict("records")
+    row_count = len(rows)
+    if row_count == 0:
+        raise HTTPException(status_code=400, detail="CSV contains no data rows")
+
+    history_doc = {
+        "id": upload_id,
+        "source": "csv_upload",
+        "status": "processing",
+        "phase": "queued",
+        "created_at": datetime.utcnow(),
+        "filename": file.filename or "upload.csv",
+        "batch_name": resolved_batch,
+        "original_csv_secure_url": original_csv_secure_url,
+        "original_csv_public_id": original_csv_public_id,
+        "processed": 0,
+        "new_leads": 0,
+        "updated_leads": 0,
+        "unprocessed": 0,
+        "row_count": row_count,
+        "rows_processed": 0,
+        "csv_headers": [str(c) for c in df.columns.tolist()],
+        "futwork_pushed": 0,
+        "futwork_failed": 0,
+        "push_to_futwork": bool(push_to_futwork),
+    }
+    try:
+        await db.lead_upload_history.insert_one(history_doc)
+    except Exception:
+        logger.exception("Failed to record lead_upload_history | upload_id=%s", upload_id)
+        raise HTTPException(status_code=500, detail="Could not start upload job")
+
+    schedule_lead_csv_upload_job(
+        upload_id=upload_id,
+        rows=rows,
+        resolved_batch=resolved_batch,
+        filename=file.filename or "upload.csv",
+        csv_headers=[str(c) for c in df.columns.tolist()],
+        original_csv_secure_url=original_csv_secure_url,
+        original_csv_public_id=original_csv_public_id,
+        push_to_futwork=push_to_futwork,
+    )
+
+    return LeadUploadStartResponse(
+        upload_id=upload_id,
+        status="processing",
+        row_count=row_count,
+        batch_name=resolved_batch,
+    )
+
+
+@router.get("/upload/{upload_id}/status", response_model=LeadUploadStatusResponse)
+async def get_lead_upload_status(upload_id: str, db=Depends(get_db)):
+    doc = await db.lead_upload_history.find_one({"id": upload_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    return LeadUploadStatusResponse(
+        upload_id=upload_id,
+        status=str(doc.get("status") or "unknown"),
+        phase=str(doc.get("phase") or ""),
+        row_count=int(doc.get("row_count") or 0),
+        rows_processed=int(doc.get("rows_processed") or 0),
+        processed=int(doc.get("processed") or 0),
+        new_leads=int(doc.get("new_leads") or 0),
+        updated_leads=int(doc.get("updated_leads") or 0),
+        unprocessed=int(doc.get("unprocessed") or 0),
+        futwork_pushed=int(doc.get("futwork_pushed") or 0),
+        futwork_failed=int(doc.get("futwork_failed") or 0),
+        batch_name=str(doc.get("batch_name") or ""),
+        filename=str(doc.get("filename") or ""),
+        error_message=str(doc.get("error_message") or ""),
+    )
+
+
+# Legacy synchronous upload body removed — processing runs in background.
+
+
+@router.patch("/{lead_id}/assign")
+async def assign_lead(
+    lead_id: str,
+    payload: dict,
+    _admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    assert_vc_mutations_blocked()
+    assigned_user_id = payload.get("assigned_user_id")
+    if not assigned_user_id:
+        raise HTTPException(status_code=400, detail="assigned_user_id is required")
+    notes = (payload.get("notes") or "").strip()
+    ok = await AssignmentService(db).assign_lead(
+        lead_id, assigned_user_id, transfer_notes=notes
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Lead or user not found")
+    return {"status": "success", "lead_id": lead_id, "assigned_user_id": assigned_user_id}
+
+
+@router.post("/{lead_id}/auto-assign")
+async def auto_assign_lead(
+    lead_id: str,
+    _admin: dict = Depends(require_admin),
+    db=Depends(get_db),
+):
+    assert_vc_mutations_blocked()
+    rep, message = await AssignmentService(db).auto_assign_lead(lead_id)
+    if not rep:
+        raise HTTPException(status_code=400, detail=message)
+    return {
+        "status": "success",
+        "assigned_to": rep.get("full_name"),
+        "assigned_user_id": rep.get("id"),
+        "active_leads": rep.get("active_leads", 0),
+        "message": message,
+    }
+
+
+@router.patch("/{lead_id}/sales-qualification")
+async def update_sales_qualification(
+    lead_id: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    assert_vc_mutations_blocked()
+    value = (payload.get("sales_qualification") or "").strip()
+    if value and value not in SALES_QUALIFICATION_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sales_qualification must be one of: {', '.join(sorted(SALES_QUALIFICATION_VALUES))}",
+        )
+
+    lead = await db.leads.find_one({"id": lead_id}, {"_id": 0, "assigned_user_id": 1})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    role = (current_user.get("role") or "sales").lower()
+    if role == "sales" and lead.get("assigned_user_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="You can only qualify your assigned leads")
+
+    now = datetime.utcnow()
+    await db.leads.update_one(
+        {"id": lead_id},
+        {
+            "$set": {
+                "sales_qualification": value or None,
+                "sales_qualified_at": now if value else None,
+                "sales_qualified_by": current_user["id"] if value else None,
+                "updated_at": now,
+            }
+        },
+    )
+    return {"status": "success", "sales_qualification": value or None}
+
+
+@router.patch("/{lead_id}/disposition")
+async def update_disposition(lead_id: str, payload: dict, db = Depends(get_db)):
+    assert_vc_mutations_blocked()
+    disposition = payload.get("disposition")
+    if not disposition:
+        raise HTTPException(status_code=400, detail="Disposition is required")
+
+    service = LeadService(db)
+    updated = await service.update_disposition(lead_id, disposition)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return {"status": "success", "disposition": disposition}

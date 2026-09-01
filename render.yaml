@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: the-hindu-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.0"
+      - key: MONGO_URL
+        sync: false
+      - key: DB_NAME
+        value: hindu_db
+      - key: BOLNA_API_KEY
+        sync: false
+      - key: BOLNA_AGENT_ID
+        sync: false
+      - key: BOLNA_FROM_PHONE
+        sync: false
+      - key: BOLNA_WEBHOOK_SECRET
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
