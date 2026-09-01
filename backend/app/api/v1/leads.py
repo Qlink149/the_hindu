@@ -26,6 +26,7 @@ from ...core.preview_access import (
 )
 from ...utils.lead_call_history import build_lead_call_history_query
 from ...utils.bolna_disposition import extract_bolna_disposition
+from ...utils.csv_storage import store_original_csv
 from ...services.structured_ai_service import NOT_WORTHY_MESSAGE
 
 logger = logging.getLogger(__name__)
@@ -369,32 +370,6 @@ async def upload_leads(
     resolved_batch = (batch_name or "").strip() or _default_batch_name(file.filename)
     resolved_batch = re.sub(r"\s+", " ", resolved_batch).strip()[:200]
 
-    # ---- Cloudinary raw upload (required when configured) -----------------
-    original_csv_secure_url = ""
-    original_csv_public_id = ""
-    try:
-        from ...utils.cloudinary_csv import upload_lead_csv_raw
-
-        upload_result = await upload_lead_csv_raw(
-            content,
-            batch_label=resolved_batch,
-            upload_id=upload_id,
-        )
-        original_csv_secure_url = str(upload_result.get("secure_url") or "")
-        original_csv_public_id = str(upload_result.get("public_id") or "")
-    except RuntimeError as e:
-        logger.error("CSV storage unavailable: %s", e)
-        raise HTTPException(
-            status_code=503,
-            detail="CSV storage is not configured. Set CLOUDINARY_URL on the server.",
-        )
-    except Exception as e:
-        logger.exception("Cloudinary upload failed")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not store CSV file: {e!s}",
-        )
-
     # ---- Parse with encoding fallback --------------------------------------
     try:
         df = pd.read_csv(io.BytesIO(content))
@@ -413,6 +388,23 @@ async def upload_leads(
     row_count = len(rows)
     if row_count == 0:
         raise HTTPException(status_code=400, detail="CSV contains no data rows")
+
+    try:
+        stored = await store_original_csv(
+            db,
+            upload_id=upload_id,
+            filename=file.filename or "upload.csv",
+            content=content,
+            batch_label=resolved_batch,
+        )
+        original_csv_secure_url = stored.get("secure_url") or ""
+        original_csv_public_id = stored.get("public_id") or ""
+    except Exception:
+        logger.exception("Failed to store uploaded CSV | upload_id=%s", upload_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not store the CSV file. Try again in a moment.",
+        )
 
     history_doc = {
         "id": upload_id,

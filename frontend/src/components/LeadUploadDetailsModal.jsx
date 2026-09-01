@@ -161,7 +161,7 @@ const LeadUploadDetailsModal = ({ open, onOpenChange, uploadId, onUpdated }) => 
             </div>
 
             <div className="flex flex-wrap gap-2 pt-2">
-              {detail.source !== "bulk_push" && detail.original_csv_secure_url ? (
+              {detail.source !== "bulk_push" && (detail.has_original_csv || detail.original_csv_secure_url) ? (
                 <Button
                   type="button"
                   variant="outline"

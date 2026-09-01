@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 
 from ...core.config import settings
 from ...core.database import get_db
+from ...utils.csv_storage import get_original_csv_bytes, has_original_csv
 from ...models.campaign import (
     BulkFutworkEligibleCountResponse,
     BulkFutworkPushRequest,
@@ -335,6 +336,7 @@ async def get_lead_upload_details(upload_id: str, db=Depends(get_db)):
         "futwork_pushed": doc.get("futwork_pushed", 0),
         "futwork_failed": doc.get("futwork_failed", 0),
         "has_unprocessed_csv": failures_n > 0,
+        "has_original_csv": await has_original_csv(db, upload_id, doc),
     }
 
 
@@ -348,17 +350,28 @@ async def download_original_upload_csv(upload_id: str, db=Depends(get_db)):
     doc = await db.lead_upload_history.find_one({"id": upload_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Upload not found")
+
+    batch_name = (doc.get("batch_name") or "").strip() or "upload"
+    safe_base = "".join(c if (c.isalnum() or c in "._-") else "_" for c in batch_name)
+    safe_base = safe_base.strip("._-") or "upload"
+    filename = safe_base if safe_base.lower().endswith(".csv") else f"{safe_base}.csv"
+
+    stored = await get_original_csv_bytes(db, upload_id)
+    if stored:
+        body, stored_name = stored
+        download_name = filename or stored_name or "upload.csv"
+        return StreamingResponse(
+            iter([body]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+        )
+
     url = (doc.get("original_csv_secure_url") or "").strip()
     if not url:
         raise HTTPException(
             status_code=404,
             detail="Original CSV is not available for this upload",
         )
-
-    batch_name = (doc.get("batch_name") or "").strip() or "upload"
-    safe_base = "".join(c if (c.isalnum() or c in "._-") else "_" for c in batch_name)
-    safe_base = safe_base.strip("._-") or "upload"
-    filename = safe_base if safe_base.lower().endswith(".csv") else f"{safe_base}.csv"
 
     async def _iter_bytes():
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:

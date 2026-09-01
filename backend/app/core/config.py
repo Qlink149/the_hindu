@@ -51,7 +51,7 @@ class Settings:
         os.environ.get("LEAD_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024))  # 10 MiB
     )
 
-    # Cloudinary for CSV storage
+    # Optional Cloudinary mirror for original CSVs. Uploads use Mongo when unset.
     CLOUDINARY_URL: str = os.environ.get("CLOUDINARY_URL", "").strip()
 
     # WhatsApp (Gupshup) — optional; reminders no-op when unset

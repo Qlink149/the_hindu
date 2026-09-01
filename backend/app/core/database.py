@@ -148,6 +148,7 @@ async def initialize_db():
     # Upload audit trail (Campaign page)
     await db.lead_upload_history.create_index([("created_at", -1)])
     await db.lead_upload_failures.create_index("upload_id")
+    await db.lead_upload_files.create_index("upload_id", unique=True)
     await db.campaigns.create_index("futwork_campaign_id")
 
     await db.users.create_index("id", unique=True)
