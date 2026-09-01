@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from ..core.config import settings
+from ..core.time_utils import utc_now
+from ..utils.webhook_lead import is_placeholder_customer_name
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +50,67 @@ def e164_phone(lead: Dict[str, Any]) -> str:
 
 
 def display_name_for_lead(lead: Dict[str, Any]) -> str:
-    return (
+    name = (
         (lead.get("full_name") or "").strip()
         or (lead.get("customer_name") or "").strip()
-        or "Unknown"
     )
+    if name and not is_placeholder_customer_name(name):
+        return name
+    combined = " ".join(
+        p
+        for p in (
+            str(lead.get("first_name") or "").strip(),
+            str(lead.get("last_name") or "").strip(),
+        )
+        if p
+    )
+    if combined and not is_placeholder_customer_name(combined):
+        return combined
+    return name or "Unknown"
+
+
+async def record_outbound_call_placeholder(
+    db,
+    lead: Dict[str, Any],
+    *,
+    execution_id: str,
+    agent_id: str = "",
+    campaign_id: Optional[str] = None,
+) -> None:
+    """Insert a call_history row as soon as Bolna accepts the dial so the UI is live."""
+    eid = str(execution_id or "").strip()
+    if not eid or db is None:
+        return
+    phone10 = ten_digit_phone(lead)
+    name = display_name_for_lead(lead)
+    now = utc_now()
+    insert_doc: Dict[str, Any] = {
+        "id": eid,
+        "call_sid": eid,
+        "lead_id": str(lead.get("id") or ""),
+        "customer_name": name,
+        "phone": e164_phone(lead) or str(lead.get("mobile") or phone10),
+        "mobile_digits": phone10,
+        "status": "queued",
+        "disposition": "",
+        "duration": 0,
+        "agent_id": agent_id or "",
+        "campaign_id": campaign_id or "",
+        "upload_batch_id": str(lead.get("upload_batch_id") or ""),
+        "upload_batch_name": str(lead.get("upload_batch_name") or ""),
+        "direction": "outbound",
+        "hangup_by": "bot",
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        await db.call_history.update_one(
+            {"id": eid},
+            {"$setOnInsert": insert_doc, "$set": {"updated_at": now}},
+            upsert=True,
+        )
+    except Exception:
+        logger.exception("Failed to record outbound call placeholder | execution_id=%s", eid)
 
 
 def bolna_user_data(lead: Dict[str, Any], customer_name: str) -> Dict[str, str]:
@@ -184,6 +242,14 @@ async def post_one_lead_to_bolna(
             futwork_lead_id=execution_id or None,
             campaign_id=campaign_id,
         )
+        if execution_id:
+            await record_outbound_call_placeholder(
+                db,
+                lead,
+                execution_id=execution_id,
+                agent_id=resolved_agent,
+                campaign_id=campaign_id,
+            )
         return True, execution_id or None
     except httpx.HTTPStatusError as e:
         logger.error(

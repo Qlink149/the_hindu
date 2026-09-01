@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
@@ -33,8 +33,12 @@ from app.api.v1 import (
 from app.models.structured_extraction import StructuredDisposition
 from app.services.campaign_service import CampaignService
 from app.utils.futwork_disposition_stats import futwork_disposition_exact as _futwork_disposition_exact
-from app.utils.futwork_disposition_stats import canonical_disposition_label, IDAC_DISPOSITION_ORDER
+from app.utils.futwork_disposition_stats import canonical_disposition_label
 from app.utils.bolna_disposition import extract_bolna_disposition
+from app.utils.webhook_lead import is_placeholder_customer_name
+
+AGENT_ACTIVE_DISPOSITIONS = ["Attending", "Not Attending"]
+_BATCH_LEAD_CAP = 10000
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -320,6 +324,33 @@ def _legacy_lead_date_clause(
     return {"$expr": {"$and": expr_parts}}
 
 
+def _value_in_date_range(
+    value: Any, start_date: Optional[str], end_date: Optional[str]
+) -> bool:
+    clause = _call_history_date_clause(start_date, end_date)
+    if not clause:
+        return True
+    bounds = clause["created_at"]
+    dt = value
+    if isinstance(dt, str):
+        try:
+            raw = dt.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return True
+    if not isinstance(dt, datetime):
+        return True
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    gte = bounds.get("$gte")
+    lt = bounds.get("$lt")
+    if gte is not None and dt < gte:
+        return False
+    if lt is not None and dt >= lt:
+        return False
+    return True
+
+
 def _call_history_filter_query(
     campaign: Optional[str],
     status: Optional[str],
@@ -377,23 +408,51 @@ def _call_history_filter_query(
     return _and_queries(*parts)
 
 
+async def _upload_batch_created_at(db, upload_batch_id: str) -> Optional[datetime]:
+    uid = (upload_batch_id or "").strip()
+    if not uid:
+        return None
+    try:
+        doc = await db.lead_upload_history.find_one(
+            {"id": uid}, {"_id": 0, "created_at": 1}
+        )
+    except Exception:
+        return None
+    created = (doc or {}).get("created_at")
+    return created if isinstance(created, datetime) else None
+
+
 async def _upload_batch_call_clause(db, upload_batch_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Match calls tagged with this batch, or calls whose lead belongs to it."""
+    """Only calls that were tagged for this upload. Never lifetime history for the same phone."""
     uid = (upload_batch_id or "").strip()
     if not uid or uid == "all":
         return None
-    ors: List[Dict[str, Any]] = [{"upload_batch_id": uid}]
-    try:
-        lead_ids = [
-            str(x)
-            for x in await db.leads.distinct("id", {"upload_batch_id": uid})
-            if x
-        ]
-    except Exception:
-        lead_ids = []
-    if lead_ids:
-        ors.append({"lead_id": {"$in": lead_ids}})
-    return ors[0] if len(ors) == 1 else {"$or": ors}
+    return {"upload_batch_id": uid}
+
+
+def _display_phone(raw: Any, digits: Any = "") -> str:
+    d = "".join(c for c in str(digits or raw or "") if c.isdigit())[-10:]
+    if len(d) == 10:
+        return f"+91{d}"
+    text = str(raw or digits or "").strip()
+    return text
+
+
+def _lead_display_name(lead: Dict[str, Any]) -> str:
+    name = str(lead.get("full_name") or "").strip()
+    if name and not is_placeholder_customer_name(name):
+        return name
+    combined = " ".join(
+        p
+        for p in (
+            str(lead.get("first_name") or "").strip(),
+            str(lead.get("last_name") or "").strip(),
+        )
+        if p
+    )
+    if combined and not is_placeholder_customer_name(combined):
+        return combined
+    return combined or name or "Unknown"
 
 
 def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -402,10 +461,11 @@ def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
     disposition = (doc.get("disposition") or "").strip()
     if not disposition:
         disposition = extract_bolna_disposition(extracted)
+    phone = _display_phone(doc.get("phone"), doc.get("mobile_digits"))
     return {
         "id": doc.get("id", doc.get("call_sid", "")),
         "customer_name": doc.get("customer_name", "Unknown"),
-        "phone": doc.get("phone", "") or doc.get("mobile_digits", ""),
+        "phone": phone,
         "status": doc.get("status", ""),
         "disposition": disposition,
         "duration": int(doc.get("duration", 0) or 0),
@@ -416,15 +476,289 @@ def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "campaign": campaign_name,
         "lead_id": doc.get("lead_id", ""),
-        "direction": "outbound",
-        "hangup_by": "bot",
+        "direction": doc.get("direction") or "outbound",
+        "hangup_by": doc.get("hangup_by") or "bot",
         "extracted_data": extracted if isinstance(extracted, dict) else {},
+        "upload_batch_id": doc.get("upload_batch_id") or "",
+        "upload_batch_name": doc.get("upload_batch_name") or "",
+        "call_sid": doc.get("call_sid") or doc.get("id") or "",
     }
 
 
+def _lead_to_placeholder_row(lead: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": lead.get("id", ""),
+        "customer_name": _lead_display_name(lead),
+        "phone": _display_phone(lead.get("mobile"), lead.get("mobile_digits")),
+        "status": lead.get("last_call_status") or lead.get("futwork_sync_status") or "queued",
+        "disposition": (lead.get("disposition") or "").strip(),
+        "duration": int(lead.get("last_call_duration") or 0),
+        "recording_url": lead.get("last_recording_url") or "",
+        "transcript": lead.get("transcript") or "",
+        "created_at": serialize_datetime_utc(
+            lead.get("last_call_date") or lead.get("created_at")
+        ),
+        "campaign": lead.get("campaign_name") or "Default Campaign",
+        "lead_id": lead.get("id", ""),
+        "direction": "outbound",
+        "hangup_by": "bot",
+        "extracted_data": lead.get("extracted_data") if isinstance(lead.get("extracted_data"), dict) else {},
+        "upload_batch_id": lead.get("upload_batch_id") or "",
+        "upload_batch_name": lead.get("upload_batch_name") or "",
+        "call_sid": "",
+    }
+
+
+async def _enrich_call_rows_from_leads(db, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not rows:
+        return rows
+    lead_ids = [str(r.get("lead_id") or "") for r in rows if r.get("lead_id")]
+    mobiles = []
+    for r in rows:
+        digits = "".join(c for c in str(r.get("phone") or "") if c.isdigit())[-10:]
+        if len(digits) == 10:
+            mobiles.append(digits)
+    ors: List[Dict[str, Any]] = []
+    if lead_ids:
+        ors.append({"id": {"$in": list(dict.fromkeys(lead_ids))}})
+    if mobiles:
+        ors.append({"mobile_digits": {"$in": list(dict.fromkeys(mobiles))}})
+    if not ors:
+        return rows
+    leads = await db.leads.find(
+        ors[0] if len(ors) == 1 else {"$or": ors},
+        {
+            "_id": 0,
+            "id": 1,
+            "full_name": 1,
+            "first_name": 1,
+            "last_name": 1,
+            "mobile": 1,
+            "mobile_digits": 1,
+            "last_recording_url": 1,
+            "transcript": 1,
+            "disposition": 1,
+            "extracted_data": 1,
+            "upload_batch_id": 1,
+            "upload_batch_name": 1,
+        },
+    ).to_list(length=max(len(rows) * 2, 50))
+    by_id = {str(l.get("id") or ""): l for l in leads if l.get("id")}
+    by_mobile = {
+        str(l.get("mobile_digits") or ""): l
+        for l in leads
+        if l.get("mobile_digits")
+    }
+    for row in rows:
+        lead = by_id.get(str(row.get("lead_id") or ""))
+        if not lead:
+            digits = "".join(c for c in str(row.get("phone") or "") if c.isdigit())[-10:]
+            lead = by_mobile.get(digits)
+        if not lead:
+            continue
+        name = _lead_display_name(lead)
+        if name and not is_placeholder_customer_name(name):
+            row["customer_name"] = name
+        phone = _display_phone(lead.get("mobile"), lead.get("mobile_digits"))
+        if phone:
+            row["phone"] = phone
+        if not row.get("lead_id") and lead.get("id"):
+            row["lead_id"] = lead["id"]
+        if not row.get("recording_url") and lead.get("last_recording_url"):
+            row["recording_url"] = lead["last_recording_url"]
+        if not row.get("transcript") and lead.get("transcript"):
+            row["transcript"] = lead["transcript"]
+        if not row.get("disposition") and lead.get("disposition"):
+            row["disposition"] = lead["disposition"]
+        if not row.get("extracted_data") and isinstance(lead.get("extracted_data"), dict):
+            row["extracted_data"] = lead["extracted_data"]
+        if not row.get("upload_batch_id") and lead.get("upload_batch_id"):
+            row["upload_batch_id"] = lead["upload_batch_id"]
+        if not row.get("upload_batch_name") and lead.get("upload_batch_name"):
+            row["upload_batch_name"] = lead["upload_batch_name"]
+    return rows
+
+
+async def _list_batch_lead_call_rows(
+    db,
+    *,
+    upload_batch_id: str,
+    status: Optional[str],
+    disposition: Optional[str],
+    search: Optional[str],
+    skip_n: int,
+    limit_n: int,
+    agent_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> tuple[List[Dict[str, Any]], int]:
+    """One row per lead in the upload batch, joined to the latest call."""
+    uid = (upload_batch_id or "").strip()
+    lead_parts: List[Dict[str, Any]] = [{"upload_batch_id": uid}]
+    sq = (search or "").strip()
+    if sq:
+        esc = re.escape(sq)
+        digits = re.sub(r"\D+", "", sq)
+        ors: List[Dict[str, Any]] = [
+            {"full_name": {"$regex": esc, "$options": "i"}},
+            {"first_name": {"$regex": esc, "$options": "i"}},
+            {"last_name": {"$regex": esc, "$options": "i"}},
+            {"mobile": {"$regex": esc, "$options": "i"}},
+        ]
+        if digits:
+            ors.append({"mobile_digits": {"$regex": digits}})
+        lead_parts.append({"$or": ors})
+    lead_query = _and_queries(*lead_parts)
+    leads = await db.leads.find(
+        lead_query,
+        {
+            "_id": 0,
+            "id": 1,
+            "full_name": 1,
+            "first_name": 1,
+            "last_name": 1,
+            "mobile": 1,
+            "mobile_digits": 1,
+            "created_at": 1,
+            "updated_at": 1,
+            "last_call_date": 1,
+            "last_call_status": 1,
+            "last_call_duration": 1,
+            "last_recording_url": 1,
+            "transcript": 1,
+            "disposition": 1,
+            "extracted_data": 1,
+            "futwork_sync_status": 1,
+            "futwork_lead_id": 1,
+            "campaign_name": 1,
+            "upload_batch_id": 1,
+            "upload_batch_name": 1,
+        },
+    ).sort("created_at", -1).to_list(length=_BATCH_LEAD_CAP)
+
+    lead_ids = [str(l.get("id") or "") for l in leads if l.get("id")]
+    call_filter: Dict[str, Any] = {"upload_batch_id": uid}
+    if agent_id and agent_id != "all":
+        call_filter = {"$and": [call_filter, {"agent_id": agent_id}]}
+    call_docs = await db.call_history.find(
+        call_filter,
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(length=_BATCH_LEAD_CAP)
+
+    missing_lead_ids = [
+        str(d.get("lead_id") or "")
+        for d in call_docs
+        if d.get("lead_id") and str(d.get("lead_id")) not in set(lead_ids)
+    ]
+    if missing_lead_ids:
+        extra = await db.leads.find(
+            {"id": {"$in": missing_lead_ids}},
+            {
+                "_id": 0,
+                "id": 1,
+                "full_name": 1,
+                "first_name": 1,
+                "last_name": 1,
+                "mobile": 1,
+                "mobile_digits": 1,
+                "created_at": 1,
+                "updated_at": 1,
+                "last_call_date": 1,
+                "last_call_status": 1,
+                "last_call_duration": 1,
+                "last_recording_url": 1,
+                "transcript": 1,
+                "disposition": 1,
+                "extracted_data": 1,
+                "futwork_sync_status": 1,
+                "futwork_lead_id": 1,
+                "campaign_name": 1,
+                "upload_batch_id": 1,
+                "upload_batch_name": 1,
+            },
+        ).to_list(length=_BATCH_LEAD_CAP)
+        seen = {str(l.get("id") or "") for l in leads}
+        for lead in extra:
+            lid = str(lead.get("id") or "")
+            if lid and lid not in seen:
+                leads.append(lead)
+                seen.add(lid)
+
+    created = await _upload_batch_created_at(db, uid)
+
+    by_lead_calls: Dict[str, Dict[str, Any]] = {}
+    by_call_id: Dict[str, Dict[str, Any]] = {}
+    by_mobile: Dict[str, Dict[str, Any]] = {}
+    for doc in call_docs:
+        lid = str(doc.get("lead_id") or "")
+        if lid and lid not in by_lead_calls:
+            by_lead_calls[lid] = doc
+        cid = str(doc.get("id") or doc.get("call_sid") or "")
+        if cid and cid not in by_call_id:
+            by_call_id[cid] = doc
+        md = str(doc.get("mobile_digits") or "")
+        if md and md not in by_mobile:
+            by_mobile[md] = doc
+
+    rows: List[Dict[str, Any]] = []
+    want_status = (status or "").strip().lower()
+    want_disp = canonical_disposition_label(disposition) if disposition and disposition != "all" else ""
+    for lead in leads:
+        call_doc = (
+            by_lead_calls.get(str(lead.get("id") or ""))
+            or by_call_id.get(str(lead.get("futwork_lead_id") or ""))
+            or by_mobile.get(str(lead.get("mobile_digits") or ""))
+        )
+        if call_doc:
+            row = _doc_to_call_row(call_doc)
+            if is_placeholder_customer_name(row.get("customer_name")):
+                name = _lead_display_name(lead)
+                if name and not is_placeholder_customer_name(name):
+                    row["customer_name"] = name
+        else:
+            row = _lead_to_placeholder_row(lead)
+            lcd = lead.get("last_call_date")
+            if created is not None and isinstance(lcd, datetime) and lcd < created:
+                row["status"] = lead.get("futwork_sync_status") or "queued"
+                row["duration"] = 0
+                row["disposition"] = ""
+                row["recording_url"] = ""
+                row["transcript"] = ""
+                row["created_at"] = serialize_datetime_utc(
+                    lead.get("updated_at") or created
+                )
+            name = _lead_display_name(lead)
+            if name and not is_placeholder_customer_name(name):
+                row["customer_name"] = name
+        phone = _display_phone(lead.get("mobile"), lead.get("mobile_digits"))
+        if phone:
+            row["phone"] = phone
+        row["lead_id"] = lead.get("id") or row.get("lead_id") or ""
+        stamp = (
+            (call_doc or {}).get("started_at")
+            or (call_doc or {}).get("created_at")
+            or lead.get("last_call_date")
+            or lead.get("created_at")
+        )
+        if not _value_in_date_range(stamp, start_date, end_date):
+            continue
+        if want_status and want_status != "all":
+            if str(row.get("status") or "").strip().lower() != want_status:
+                continue
+        if want_disp:
+            got = canonical_disposition_label(row.get("disposition") or "")
+            if got != want_disp:
+                continue
+        rows.append(row)
+
+    total = len(rows)
+    page_rows = rows[skip_n : skip_n + limit_n]
+    return page_rows, total
+
+
 @app.get("/api/call-history/filters", dependencies=_auth_dep)
-async def get_call_history_filters(db=Depends(get_db)):
-    """Distinct filter values — small payload for dropdowns."""
+async def get_call_history_filters(agent_id: str = None, db=Depends(get_db)):
+    """Distinct filter values — only this agent's currently active dispositions."""
     try:
         all_campaign_names = await db.campaigns.distinct("name")
         ch_campaign_names = await db.call_history.distinct("campaign")
@@ -437,29 +771,25 @@ async def get_call_history_filters(db=Depends(get_db)):
             )
         )
 
+        match: Dict[str, Any] = {}
+        if agent_id and agent_id != "all":
+            match["agent_id"] = agent_id
         statuses = sorted(
-            {s for s in await db.call_history.distinct("status") if s is not None and str(s).strip()}
-        )
-        dispositions = sorted(
             {
-                d
-                for d in await db.call_history.distinct("disposition")
-                if d is not None and str(d).strip()
+                s
+                for s in await db.call_history.distinct("status", match)
+                if s is not None and str(s).strip()
             }
         )
-        seen = set()
-        dispositions_ordered: List[str] = []
-        for label in list(IDAC_DISPOSITION_ORDER) + dispositions:
-            if label and label not in seen:
-                seen.add(label)
-                dispositions_ordered.append(label)
+        # Hindu agent extractions only — never inject the broader IDAC list.
+        dispositions = list(AGENT_ACTIVE_DISPOSITIONS)
 
         upload_batches = await CampaignService(db).list_upload_batches_for_filters(limit=100)
 
         return {
             "campaigns": campaigns_merged,
             "statuses": statuses,
-            "dispositions": dispositions_ordered,
+            "dispositions": dispositions,
             "upload_batches": upload_batches,
         }
     except Exception as e:
@@ -672,6 +1002,33 @@ async def get_call_history_ai_batch_summary(
         }
 
 
+@app.get("/api/call-history/by-id/{call_id}", dependencies=_auth_dep)
+async def get_call_history_by_id(call_id: str, db=Depends(get_db)):
+    """Full call (or lead placeholder) for the View Details modal."""
+    cid = (call_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=404, detail="Call not found")
+    doc = await db.call_history.find_one(
+        {"$or": [{"id": cid}, {"call_sid": cid}]},
+        {"_id": 0},
+    )
+    if doc:
+        rows = await _enrich_call_rows_from_leads(db, [_doc_to_call_row(doc)])
+        return rows[0]
+    lead = await db.leads.find_one({"id": cid}, {"_id": 0})
+    if lead:
+        latest = await (
+            db.call_history.find({"lead_id": cid}, {"_id": 0})
+            .sort("created_at", -1)
+            .limit(1)
+            .to_list(1)
+        )
+        row = _doc_to_call_row(latest[0]) if latest else _lead_to_placeholder_row(lead)
+        rows = await _enrich_call_rows_from_leads(db, [row])
+        return rows[0]
+    raise HTTPException(status_code=404, detail="Call not found")
+
+
 @app.get("/api/call-history", dependencies=_auth_dep)
 async def get_call_history(
     campaign: str = None,
@@ -729,8 +1086,24 @@ async def get_call_history(
         effective_size = limit_n if use_legacy_pagination else size
 
         call_history_collection_used = await db.call_history.count_documents({}) > 0
+        uid = (upload_batch_id or "").strip()
+        use_batch_leads = bool(uid) and uid != "all" and not leadId
 
-        if call_history_collection_used:
+        if use_batch_leads:
+            calls, total = await _list_batch_lead_call_rows(
+                db,
+                upload_batch_id=uid,
+                status=status,
+                disposition=disposition,
+                search=q,
+                skip_n=skip_n,
+                limit_n=limit_n,
+                agent_id=agent_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            has_more = skip_n + len(calls) < total
+        elif call_history_collection_used:
             total = await db.call_history.count_documents(ch_query)
             ch_cursor = (
                 db.call_history.find(ch_query, {"_id": 0})
@@ -743,6 +1116,7 @@ async def get_call_history(
 
             for doc in ch_docs:
                 calls.append(_doc_to_call_row(doc))
+            calls = await _enrich_call_rows_from_leads(db, calls)
         else:
             # Legacy embedded call data on leads — only when call_history collection is empty
             legacy_parts: List[Dict[str, Any]] = [
@@ -797,14 +1171,16 @@ async def get_call_history(
                 calls.append(
                     {
                         "id": lead.get("id", ""),
-                        "customer_name": lead.get("full_name", "Unknown"),
-                        "phone": lead.get("mobile", "") or lead.get("mobile_digits", ""),
+                        "customer_name": _lead_display_name(lead),
+                        "phone": _display_phone(lead.get("mobile"), lead.get("mobile_digits")),
                         "status": call_status,
                         "disposition": lead.get("disposition", ""),
                         "duration": int(lead.get("call_duration", 0) or 0),
                         "recording_url": lead.get("recording_url", ""),
                         "transcript": lead.get("transcript", ""),
-                        "created_at": lead.get("call_date", lead.get("created_at", "")),
+                        "created_at": serialize_datetime_utc(
+                            lead.get("call_date") or lead.get("created_at")
+                        ),
                         "campaign": campaign_name,
                         "lead_id": lead.get("id", ""),
                         "direction": "outbound",

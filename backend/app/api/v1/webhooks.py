@@ -20,6 +20,7 @@ from ...utils.bolna_disposition import extract_bolna_disposition
 from ...utils.webhook_lead import (
     call_history_lead_id_value,
     has_webhook_id_hints,
+    is_placeholder_customer_name,
     lead_update_filter,
     resolve_lead_for_webhook,
 )
@@ -78,6 +79,11 @@ _LEAD_RESOLVE_PROJECTION = {
     "assigned_user_id": 1,
     "upload_batch_id": 1,
     "upload_batch_name": 1,
+    "full_name": 1,
+    "first_name": 1,
+    "last_name": 1,
+    "mobile": 1,
+    "mobile_digits": 1,
 }
 
 
@@ -217,7 +223,6 @@ def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         recipient_data.get("lead_id"),
         recipient_data.get("leadId"),
         recipient_data.get("unique_identifier"),
-        execution_id,
     )
     return {
         "callSid": execution_id,
@@ -294,9 +299,12 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
     context        = _as_dict(data.get("contextDetails"))
     raw_phone      = context.get("recipientPhoneNumber", "") or to_number
     recipient_data = _as_dict(context.get("recipientData"))
-    customer_name  = recipient_data.get("customer_name", "Unknown")
+    customer_name  = recipient_data.get("customer_name", "") or ""
+    if is_placeholder_customer_name(customer_name):
+        customer_name = ""
     echo_client_id = str(
-        recipient_data.get("leadId")
+        recipient_data.get("lead_id")
+        or recipient_data.get("leadId")
         or recipient_data.get("unique_identifier")
         or ""
     ).strip()
@@ -394,6 +402,23 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
         set_fields["upload_batch_id"] = upload_batch_id
     if upload_batch_name:
         set_fields["upload_batch_name"] = upload_batch_name
+    lead_display_name = _first_str(
+        (existing_lead or {}).get("full_name"),
+        " ".join(
+            p
+            for p in (
+                str((existing_lead or {}).get("first_name") or "").strip(),
+                str((existing_lead or {}).get("last_name") or "").strip(),
+            )
+            if p
+        ),
+    )
+    if lead_display_name and not is_placeholder_customer_name(lead_display_name):
+        set_fields["customer_name"] = lead_display_name
+        customer_name = lead_display_name
+    lead_phone = _first_str((existing_lead or {}).get("mobile"), raw_phone)
+    if lead_phone:
+        set_fields["phone"] = lead_phone
     # Only regress futwork_status/status if we are NOT in a stale-intermediate
     # case (otherwise a delayed `in-progress` after `completed` would corrupt
     # the terminal record).
@@ -466,13 +491,14 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
     lead_set: Dict[str, Any] = {
         "updated_at": utc_now(),
     }
-    if raw_phone:
+    if raw_phone and not (existing_lead or {}).get("mobile"):
         lead_set["mobile"] = raw_phone
     if mobile_digits:
         lead_set["mobile_digits"] = mobile_digits
     if webhook_futwork_id:
         lead_set["futwork_lead_id"] = webhook_futwork_id
-    if customer_name and customer_name != "Unknown":
+    existing_name = str((existing_lead or {}).get("full_name") or "").strip()
+    if (not existing_name or existing_name.lower() == "unknown") and customer_name and customer_name != "Unknown":
         lead_set["full_name"] = customer_name
 
     if can_advance_lead:

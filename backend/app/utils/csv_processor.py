@@ -207,7 +207,16 @@ def process_lead_upload_row(row: Dict[str, Any]) -> Dict[str, Any]:
     if len(mobile_digits) != 10:
         return {}
 
-    name = _cell(r, "Name", "Full Name", "Last Name", "customer_name")
+    name = _cell(
+        r,
+        "Name",
+        "Full Name",
+        "Full name",
+        "Customer Name",
+        "Customer name",
+        "customer_name",
+        "Last Name",
+    )
 
     lead: Dict[str, Any] = {
         "mobile": raw_mobile or mobile_digits,

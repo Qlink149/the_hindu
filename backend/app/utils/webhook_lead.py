@@ -9,6 +9,19 @@ from .csv_processor import phone_lookup_candidates
 
 logger = logging.getLogger(__name__)
 
+PLACEHOLDER_CUSTOMER_NAMES = {
+    "unknown",
+    "test call",
+    "n/a",
+    "na",
+    "-",
+    "none",
+}
+
+
+def is_placeholder_customer_name(name: Any) -> bool:
+    return str(name or "").strip().lower() in PLACEHOLDER_CUSTOMER_NAMES
+
 
 def client_id_lookup_filter(echo_client_id: str) -> Optional[Dict[str, Any]]:
     """Mongo filter for CRM client id (recipientData echo). Priority 1."""

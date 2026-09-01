@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -35,7 +35,8 @@ const formatDuration = (seconds) => {
   return `${secs}s`;
 };
 
-const formatDate = (dateStr) => formatDateTimeIST(dateStr);
+const formatDate = (dateStr) =>
+  formatDateTimeIST(dateStr, { second: "2-digit", hour12: true });
 
 const getDispositionBadge = (d) => getIdacDispositionBadgeClass(d);
 
@@ -56,6 +57,17 @@ const StatusIcon = ({ status }) => {
   }
 };
 
+const extractionSummary = (extracted) => {
+  if (!extracted || typeof extracted !== "object") return "";
+  const general = extracted.General && typeof extracted.General === "object" ? extracted.General : {};
+  const summaryNode = general["Call Summary"] || extracted.call_summary;
+  if (typeof summaryNode === "string") return summaryNode.trim();
+  if (summaryNode && typeof summaryNode === "object") {
+    return String(summaryNode.subjective || summaryNode.objective || summaryNode.value || "").trim();
+  }
+  return "";
+};
+
 const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => {
   const navigate = useNavigate();
   const audioRef = useRef(null);
@@ -63,7 +75,37 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [updatingDisposition, setUpdatingDisposition] = useState(false);
-  const disposition = resolveCallDisposition(call);
+  const [detail, setDetail] = useState(call);
+  const disposition = resolveCallDisposition(detail || call);
+  const summaryText = extractionSummary(detail?.extracted_data || call?.extracted_data);
+
+  useEffect(() => {
+    setDetail(call);
+    if (!open || !call) return undefined;
+    const cid = encodeURIComponent(String(call.id || call.call_sid || "").trim());
+    if (!cid) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get(`/call-history/by-id/${cid}`);
+        if (cancelled || !res.data) return;
+        setDetail((prev) => ({
+          ...(prev || {}),
+          ...res.data,
+          customer_name:
+            (prev?.customer_name && prev.customer_name !== "Unknown"
+              ? prev.customer_name
+              : res.data.customer_name) || res.data.customer_name,
+          phone: prev?.phone || res.data.phone,
+        }));
+      } catch {
+        /* keep the row payload if the full document is missing */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, call]);
 
   const handleOpenChange = (next) => {
     if (!next) {
@@ -115,6 +157,8 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
     }
   };
 
+  const view = detail || call;
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="executive-card surface-elevated text-white max-w-3xl w-[calc(100vw-2rem)] h-[min(90vh,820px)] p-0 overflow-hidden flex flex-col gap-0">
@@ -123,12 +167,12 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
             <PhoneCall className="w-5 h-5 text-[#C5A059]" />
             <span>Call Details</span>
             <span className="text-[#A3A3A3] text-sm font-normal truncate">
-              · {call?.customer_name || "Unknown"}
+              · {view?.customer_name || "Unknown"}
             </span>
           </DialogTitle>
         </DialogHeader>
 
-        {call && (
+        {view && (
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-luxe px-6 py-5 space-y-6">
             <div className="bg-white/5 rounded-lg p-4 border border-white/10">
               <h3 className="kicker mb-4 flex items-center gap-2">
@@ -140,17 +184,17 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                   <p className="text-xs text-[#525252] mb-1">Status</p>
                   <span
                     className={`px-2 py-1 rounded text-xs inline-flex items-center gap-1 ${getStatusBadge(
-                      call.status
+                      view.status
                     )}`}
                   >
-                    <StatusIcon status={call.status} />
-                    <span className="capitalize">{call.status}</span>
+                    <StatusIcon status={view.status} />
+                    <span className="capitalize">{view.status}</span>
                   </span>
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs text-[#525252] mb-1">Duration</p>
                   <p className="text-[#C5A059] font-medium tabular-nums">
-                    {formatDuration(call.duration)}
+                    {formatDuration(view.duration)}
                   </p>
                 </div>
                 <div className="min-w-0">
@@ -168,12 +212,16 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                   )}
                 </div>
                 <div className="min-w-[11rem]">
-                  <p className="text-xs text-[#525252] mb-1">Call Date</p>
+                  <p className="text-xs text-[#525252] mb-1">Timestamp</p>
                   <p className="text-white text-sm tabular-nums whitespace-nowrap">
-                    {formatDate(call.created_at)}
+                    {formatDate(view.created_at)}
                   </p>
                 </div>
               </div>
+
+              {summaryText ? (
+                <p className="mt-4 text-sm text-[#D4D4D8] leading-relaxed">{summaryText}</p>
+              ) : null}
 
               <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap items-center gap-2">
                 <span className="text-xs uppercase tracking-wider text-[#525252] mr-2">
@@ -183,7 +231,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                   data-testid="mark-attending-btn"
                   size="sm"
                   disabled={disposition === "Attending" || updatingDisposition}
-                  onClick={() => updateDisposition(call, "Attending")}
+                  onClick={() => updateDisposition(view, "Attending")}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 btn-tactile"
                 >
                   {updatingDisposition ? "..." : "Mark Attending"}
@@ -192,7 +240,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                   data-testid="mark-not-attending-btn"
                   size="sm"
                   disabled={disposition === "Not Attending" || updatingDisposition}
-                  onClick={() => updateDisposition(call, "Not Attending")}
+                  onClick={() => updateDisposition(view, "Not Attending")}
                   className="bg-red-700 hover:bg-red-600 text-white disabled:opacity-40 btn-tactile"
                 >
                   {updatingDisposition ? "..." : "Mark Not Attending"}
@@ -200,7 +248,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
               </div>
             </div>
 
-            {call.recording_url && (
+            {view.recording_url && (
               <div className="bg-white/5 rounded-lg p-4 border border-white/10">
                 <h3 className="kicker mb-4 flex items-center gap-2">
                   <Play className="w-4 h-4" />
@@ -244,7 +292,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
 
                 <audio
                   ref={audioRef}
-                  src={call.recording_url}
+                  src={view.recording_url}
                   onTimeUpdate={handleTimeUpdate}
                   onLoadedMetadata={handleLoadedMetadata}
                   onEnded={() => setIsPlaying(false)}
@@ -274,19 +322,19 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                     <div className="min-w-0">
                       <p className="text-xs text-[#525252] mb-1">Phone Number</p>
                       <p className="text-white font-mono tabular-nums truncate">
-                        {call.phone || "N/A"}
+                        {view.phone || "N/A"}
                       </p>
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-[#525252] mb-1">Customer Name</p>
-                      <p className="text-white truncate">{call.customer_name || "Unknown"}</p>
+                      <p className="text-white truncate">{view.customer_name || "Unknown"}</p>
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-[#525252] mb-1">Lead ID</p>
                       <p className="text-white font-mono text-sm truncate">
-                        {call.lead_id || "N/A"}
+                        {view.lead_id || "N/A"}
                       </p>
-                      {!call.lead_id && call.phone && !isVirtualCustomerLocked() ? (
+                      {!view.lead_id && view.phone && !isVirtualCustomerLocked() ? (
                         <Button
                           type="button"
                           variant="outline"
@@ -294,7 +342,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                           className="mt-2 border-[#C5A059]/40 text-[#C5A059] hover:bg-[#C5A059]/10"
                           onClick={() => {
                             const q = new URLSearchParams({
-                              search: call.phone,
+                              search: view.phone,
                               futwork_sync_status: "all",
                             });
                             navigateToVirtualCustomer(
@@ -308,16 +356,18 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                       ) : null}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs text-[#525252] mb-1">Campaign</p>
-                      <p className="text-white truncate">{call.campaign || "N/A"}</p>
+                      <p className="text-xs text-[#525252] mb-1">Batch</p>
+                      <p className="text-white truncate">
+                        {view.upload_batch_name || view.campaign || "N/A"}
+                      </p>
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-[#525252] mb-1">Direction</p>
-                      <p className="text-white capitalize">{call.direction || "Outbound"}</p>
+                      <p className="text-white capitalize">{view.direction || "Outbound"}</p>
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs text-[#525252] mb-1">Hangup By</p>
-                      <p className="text-white capitalize">{call.hangup_by || "N/A"}</p>
+                      <p className="text-white capitalize">{view.hangup_by || "N/A"}</p>
                     </div>
                   </div>
                 </div>
@@ -329,10 +379,10 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                     <FileText className="w-4 h-4" />
                     Call Transcript
                   </h4>
-                  {call.transcript ? (
+                  {view.transcript ? (
                     <div className="max-h-[55vh] min-h-[200px] overflow-y-auto pr-1 scrollbar-luxe">
                       <div className="flex flex-col gap-3 w-full pr-2">
-                        {parseCallTranscriptTurns(call.transcript).map((turn, idx) => (
+                        {parseCallTranscriptTurns(view.transcript).map((turn, idx) => (
                           <div
                             key={`${idx}-${turn.isUser ? "c" : "a"}-${turn.text.slice(0, 40)}`}
                             className={`flex w-full shrink-0 ${

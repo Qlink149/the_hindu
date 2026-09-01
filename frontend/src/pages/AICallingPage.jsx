@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Phone,
   PhoneCall,
-  Clock,
   User,
-  Filter,
   Search,
   CheckCircle,
   XCircle,
@@ -49,7 +47,6 @@ import {
   formatDateTimeIST,
 } from "../lib/dateUtils";
 import {
-  IDAC_DISPOSITION_FILTER_OPTIONS,
   getIdacDispositionBadgeClass,
   resolveCallDisposition,
 } from "../lib/idacDispositions";
@@ -72,7 +69,8 @@ const formatDuration = (seconds) => {
   return `${secs}s`;
 };
 
-const formatDate = (dateStr) => formatDateTimeIST(dateStr);
+const formatDate = (dateStr) =>
+  formatDateTimeIST(dateStr, { second: "2-digit", hour12: true });
 
 const getDispositionBadge = (d) => getIdacDispositionBadgeClass(d);
 
@@ -244,16 +242,13 @@ const StatTile = memo(function StatTile({
 // Main page
 // -----------------------------------------------------------------------------
 const AICallingPage = () => {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [calls, setCalls] = useState([]);
-  const [campaigns, setCampaigns] = useState([]);
   const [statusOptions, setStatusOptions] = useState([]);
   const [dispositionOptions, setDispositionOptions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  const [selectedCampaign, setSelectedCampaign] = useState("all");
   const [selectedCall, setSelectedCall] = useState(null);
   const [showCallDetail, setShowCallDetail] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -305,19 +300,21 @@ const AICallingPage = () => {
     }
   }, [searchParams]);
 
-  // -------- Bootstrap filters --------
+  // -------- Bootstrap filters (re-fetch dispositions when agent changes) --------
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const [filRes, batchesRes] = await Promise.allSettled([
-          api.get("/call-history/filters"),
+          api.get("/call-history/filters", {
+            params:
+              agentFilter && agentFilter !== "all" ? { agent_id: agentFilter } : {},
+          }),
           campaignsAPI.getUploadBatches(),
         ]);
         if (cancelled) return;
         if (filRes.status === "fulfilled") {
           const d = filRes.value.data || {};
-          setCampaigns(Array.isArray(d.campaigns) ? d.campaigns : []);
           setStatusOptions(Array.isArray(d.statuses) ? d.statuses : []);
           setDispositionOptions(Array.isArray(d.dispositions) ? d.dispositions : []);
         }
@@ -326,13 +323,13 @@ const AICallingPage = () => {
         }
       } catch (e) {
         console.error(e);
-        toast.error("Could not load campaign filters");
+        toast.error("Could not load filters");
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [agentFilter]);
 
   // -------- Params builders (stable) --------
   const dateParams = useMemo(() => buildCallHistoryDateParams(dateRange), [dateRange]);
@@ -341,7 +338,6 @@ const AICallingPage = () => {
     (pageNum) => ({
       page: pageNum,
       size: PAGE_SIZE,
-      ...(selectedCampaign && selectedCampaign !== "all" ? { campaign: selectedCampaign } : {}),
       ...(statusFilter && statusFilter !== "all" ? { status: statusFilter } : {}),
       ...(dispositionFilter && dispositionFilter !== "all"
         ? { disposition: dispositionFilter }
@@ -355,7 +351,6 @@ const AICallingPage = () => {
       ...dateParams,
     }),
     [
-      selectedCampaign,
       statusFilter,
       dispositionFilter,
       debouncedSearch,
@@ -368,7 +363,6 @@ const AICallingPage = () => {
 
   const summaryParams = useCallback(
     () => ({
-      ...(selectedCampaign && selectedCampaign !== "all" ? { campaign: selectedCampaign } : {}),
       ...(statusFilter && statusFilter !== "all" ? { status: statusFilter } : {}),
       ...(dispositionFilter && dispositionFilter !== "all"
         ? { disposition: dispositionFilter }
@@ -380,7 +374,7 @@ const AICallingPage = () => {
       ...(agentFilter && agentFilter !== "all" ? { agent_id: agentFilter } : {}),
       ...dateParams,
     }),
-    [selectedCampaign, statusFilter, dispositionFilter, debouncedSearch, uploadBatchFilter, agentFilter, dateParams]
+    [statusFilter, dispositionFilter, debouncedSearch, uploadBatchFilter, agentFilter, dateParams]
   );
 
   // -------- Primary fetch on filter change --------
@@ -418,6 +412,27 @@ const AICallingPage = () => {
       cancelled = true;
     };
   }, [listParams, summaryParams, hasLoadedOnce]);
+
+  useEffect(() => {
+    if (!hasLoadedOnce) return undefined;
+    const tick = async () => {
+      try {
+        const [listRes, sumRes] = await Promise.all([
+          api.get("/call-history", { params: listParams(1) }),
+          api.get("/call-history/summary", { params: summaryParams() }),
+        ]);
+        setCalls(listRes.data?.calls || []);
+        setTotal(Number(listRes.data?.total ?? 0));
+        setHasMore(Boolean(listRes.data?.has_more));
+        setPage(1);
+        setSummary(sumRes.data || null);
+      } catch {
+        /* keep the current list if a background refresh fails */
+      }
+    };
+    const timer = setInterval(tick, 8000);
+    return () => clearInterval(timer);
+  }, [hasLoadedOnce, listParams, summaryParams]);
 
   const isInitialLoading = loading && !hasLoadedOnce;
   const isRefetching = loading && hasLoadedOnce;
@@ -471,11 +486,19 @@ const AICallingPage = () => {
   }, [summary, total]);
 
   const fallbackStatuses = ["completed", "no-answer", "busy", "failed"];
-  const fallbackDispositions = IDAC_DISPOSITION_FILTER_OPTIONS;
+  const dispositionList = Array.isArray(dispositionOptions) ? dispositionOptions : [];
   const statusList = statusOptions.length ? statusOptions : fallbackStatuses;
-  const dispositionList = Array.from(
-    new Set([...(dispositionOptions || []), ...fallbackDispositions])
-  );
+
+  useEffect(() => {
+    if (
+      dispositionFilter !== "all" &&
+      Array.isArray(dispositionOptions) &&
+      dispositionOptions.length > 0 &&
+      !dispositionOptions.includes(dispositionFilter)
+    ) {
+      setDispositionFilter("all");
+    }
+  }, [dispositionOptions, dispositionFilter]);
 
   const batchOptions = useMemo(() => {
     const list = Array.isArray(uploadBatches) ? [...uploadBatches] : [];
@@ -494,7 +517,6 @@ const AICallingPage = () => {
   }, [uploadBatches, uploadBatchFilter, searchParams]);
 
   const handleResetFilters = useCallback(() => {
-    setSelectedCampaign("all");
     setStatusFilter("all");
     setDispositionFilter("all");
     setSearchQuery("");
@@ -532,12 +554,12 @@ const AICallingPage = () => {
           </h1>
           <p className="text-[#A1A1AA]">
             {uploadBatchFilter !== "all"
-              ? `Calls for ${
+              ? `Leads in ${
                   batchOptions.find((b) => b.id === uploadBatchFilter)?.name ||
                   searchParams.get("batch_name") ||
-                  "this campaign batch"
+                  "this batch"
                 }`
-              : "Live record of every AI-placed call for The Hindu campaigns"}
+              : "Live record of every AI-placed call"}
           </p>
           <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <AgentSelect
@@ -593,26 +615,9 @@ const AICallingPage = () => {
               transition={{ duration: 0.3 }}
               className="glass-card rounded-xl p-4 mb-6"
             >
-              <div className="flex items-center gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Filter className="w-4 h-4 text-[#C5A059]" />
-                  <Select value={selectedCampaign} onValueChange={setSelectedCampaign}>
-                    <SelectTrigger className="w-[200px] bg-[#1A1A1A] border-white/10 text-white">
-                      <SelectValue placeholder="All Campaigns" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-[#1A1A1A] border-white/10">
-                      <SelectItem value="all">All Campaigns</SelectItem>
-                      {campaigns.map((campaign) => (
-                        <SelectItem key={campaign} value={campaign}>
-                          {campaign}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
+              <div className="flex items-center gap-3 flex-wrap">
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-[150px] bg-[#1A1A1A] border-white/10 text-white">
+                  <SelectTrigger className="w-full sm:w-[150px] bg-[#1A1A1A] border-white/10 text-white">
                     <SelectValue placeholder="All Status" />
                   </SelectTrigger>
                   <SelectContent className="bg-[#1A1A1A] border-white/10">
@@ -633,16 +638,16 @@ const AICallingPage = () => {
                   allowAll
                   showIcon={false}
                   placeholder="All agents"
-                  triggerClassName="w-[200px] bg-[#1A1A1A] border-white/10 text-white"
+                  triggerClassName="w-full sm:w-[200px] bg-[#1A1A1A] border-white/10 text-white"
                   testId="agent-filter-select"
                 />
 
                 {batchOptions.length > 0 && (
                   <Select value={uploadBatchFilter} onValueChange={setUploadBatchFilter}>
-                    <SelectTrigger className="w-[220px] bg-[#1A1A1A] border-white/10 text-white">
+                    <SelectTrigger className="w-full sm:w-[220px] bg-[#1A1A1A] border-white/10 text-white">
                       <SelectValue placeholder="All Batches" />
                     </SelectTrigger>
-                    <SelectContent className="bg-[#1A1A1A] border-white/10">
+                    <SelectContent className="bg-[#1A1A1A] border-white/10 max-h-[50vh]">
                       <SelectItem value="all">All Batches</SelectItem>
                       {batchOptions.map((b) => (
                         <SelectItem key={b.id} value={b.id}>
@@ -655,10 +660,10 @@ const AICallingPage = () => {
                 )}
 
                 <Select value={dispositionFilter} onValueChange={setDispositionFilter}>
-                  <SelectTrigger className="w-[180px] bg-[#1A1A1A] border-white/10 text-white">
+                  <SelectTrigger className="w-full min-w-[12rem] sm:w-[200px] bg-[#1A1A1A] border-white/10 text-white">
                     <SelectValue placeholder="All Dispositions" />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#1A1A1A] border-white/10">
+                  <SelectContent className="bg-[#1A1A1A] border-white/10 max-h-[50vh]">
                     <SelectItem value="all">All Dispositions</SelectItem>
                     {dispositionList.map((d) => (
                       <SelectItem key={d} value={d}>
@@ -740,7 +745,7 @@ const AICallingPage = () => {
               <div className="p-4 border-b border-white/10 flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-white tracking-tight">
-                    Call History
+                    {uploadBatchFilter !== "all" ? "Batch leads" : "Call History"}
                   </h2>
                   <p className="text-sm text-[#A3A3A3]">
                     {hasLoadedOnce ? (
@@ -748,8 +753,7 @@ const AICallingPage = () => {
                     ) : (
                       <span className="text-[#737373]">—</span>
                     )}{" "}
-                    calls
-                    found
+                    {uploadBatchFilter !== "all" ? "leads" : "calls"} found
                     {isRefetching && (
                       <span className="text-[#C5A059] ml-1">(refreshing…)</span>
                     )}
@@ -796,8 +800,16 @@ const AICallingPage = () => {
                   ) : calls.length === 0 ? (
                     <EmptyState
                       icon={PhoneOff}
-                      title="No calls match these filters"
-                      description="Adjust filters or wait for the next live batch."
+                      title={
+                        uploadBatchFilter !== "all"
+                          ? "No leads match these filters"
+                          : "No calls match these filters"
+                      }
+                      description={
+                        uploadBatchFilter !== "all"
+                          ? "This batch has no matching leads for the current filters."
+                          : "Adjust filters or wait for the next live batch."
+                      }
                       action={{ label: "Reset filters", onClick: handleResetFilters }}
                     />
                   ) : (

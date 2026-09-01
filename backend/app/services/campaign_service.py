@@ -248,12 +248,18 @@ class CampaignService:
         digits = "".join(c for c in str(phone or "") if c.isdigit())[-10:]
         if len(digits) != 10:
             raise ValueError("invalid_phone")
-        lead = {
-            "mobile_digits": digits,
-            "mobile": digits,
-            "full_name": "Test call",
-            "customer_name": "Test call",
-        }
+        existing = await self.db.leads.find_one({"mobile_digits": digits}, {"_id": 0})
+        if existing:
+            lead = dict(existing)
+            lead.setdefault("mobile_digits", digits)
+            lead.setdefault("mobile", existing.get("mobile") or digits)
+        else:
+            lead = {
+                "mobile_digits": digits,
+                "mobile": digits,
+                "full_name": "Test call",
+                "customer_name": "Test call",
+            }
         async with httpx.AsyncClient(timeout=30.0) as http_client:
             ok, execution_id = await post_one_lead_to_futwork(
                 http_client,
