@@ -39,7 +39,6 @@ class Settings:
     # Bolna Voice AI (primary calling engine for The Hindu)
     BOLNA_API_KEY: str = os.environ.get("BOLNA_API_KEY", "").strip()
     BOLNA_AGENT_ID: str = os.environ.get("BOLNA_AGENT_ID", "").strip()
-    BOLNA_FROM_PHONE: str = os.environ.get("BOLNA_FROM_PHONE", "").strip()
     BOLNA_BASE_URL: str = os.environ.get("BOLNA_BASE_URL", "https://api.bolna.ai").strip() or "https://api.bolna.ai"
     BOLNA_WEBHOOK_SECRET: str = os.environ.get("BOLNA_WEBHOOK_SECRET", "").strip()
     AUTO_CREATE_LEAD_FROM_ORPHAN_WEBHOOK: str = os.environ.get(
@@ -97,6 +96,11 @@ class Settings:
     @property
     def llm_configured(self) -> bool:
         return bool(self.groq_api_keys) or bool(self.OPENAI_API_KEY)
+
+    @property
+    def BOLNA_FROM_PHONE(self) -> str:
+        """Read at call time so a Render env change does not require a rebuild."""
+        return os.environ.get("BOLNA_FROM_PHONE", "").strip()
 
     @property
     def bolna_enabled(self) -> bool:

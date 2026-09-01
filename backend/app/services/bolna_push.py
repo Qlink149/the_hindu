@@ -27,6 +27,23 @@ def ten_digit_phone(lead: Dict[str, Any]) -> str:
     return db_digits if len(db_digits) == 10 else ""
 
 
+def e164_from_number(raw: str) -> str:
+    """Normalize a Bolna sender number to E.164. Indian 10-digit values get +91."""
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    digits = "".join(c for c in value if c.isdigit())
+    if not digits:
+        return ""
+    if value.startswith("+"):
+        return f"+{digits}"
+    if digits.startswith("91") and len(digits) >= 12:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+91{digits}"
+    return f"+{digits}"
+
+
 def e164_phone(lead: Dict[str, Any]) -> str:
     """Bolna requires E.164. Indian 10-digit numbers are prefixed with +91."""
     digits = "".join(
@@ -99,6 +116,7 @@ async def record_outbound_call_placeholder(
         "upload_batch_id": str(lead.get("upload_batch_id") or ""),
         "upload_batch_name": str(lead.get("upload_batch_name") or ""),
         "direction": "outbound",
+        "from_number": e164_from_number(settings.BOLNA_FROM_PHONE),
         "hangup_by": "bot",
         "created_at": now,
         "updated_at": now,
@@ -215,9 +233,13 @@ async def post_one_lead_to_bolna(
         "recipient_phone_number": recipient,
         "user_data": bolna_user_data(lead, name),
     }
-    from_number = (settings.BOLNA_FROM_PHONE or "").strip()
+    from_number = e164_from_number(settings.BOLNA_FROM_PHONE)
     if from_number:
         payload["from_phone_number"] = from_number
+    else:
+        logger.warning(
+            "BOLNA_FROM_PHONE is unset; Bolna will dial from the account default number"
+        )
 
     endpoint = bolna_call_endpoint()
     headers = bolna_request_headers()

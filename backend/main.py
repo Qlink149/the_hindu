@@ -60,8 +60,9 @@ app.add_middleware(
 async def startup_db_client():
     if settings.bolna_enabled:
         logger.info(
-            "Calling engine: Bolna enabled | agent_id=%s",
+            "Calling engine: Bolna enabled | agent_id=%s | from_phone=%s",
             settings.BOLNA_AGENT_ID,
+            settings.BOLNA_FROM_PHONE or "(account default)",
         )
     elif settings.futwork_enabled:
         logger.info("Calling engine: legacy Futwork enabled")
