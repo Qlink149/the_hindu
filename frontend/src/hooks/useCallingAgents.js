@@ -59,17 +59,7 @@ export function useCallingAgents() {
     };
   }, []);
 
-  const options = useMemo(() => {
-    const list = Array.isArray(agents) ? [...agents] : [];
-    if (selectedId && !list.some((agent) => agent.id === selectedId)) {
-      list.unshift({
-        id: selectedId,
-        name: agentName || "Current agent",
-        status: "",
-      });
-    }
-    return list;
-  }, [agents, selectedId, agentName]);
+  const options = useMemo(() => (Array.isArray(agents) ? agents : []), [agents]);
 
   const selectAgent = useCallback(async (agentId) => {
     if (!agentId || agentId === "all") {

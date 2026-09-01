@@ -24,13 +24,7 @@ export default function AgentSelect({
   showIcon = true,
   testId = "agent-select",
 }) {
-  const options = useMemo(() => {
-    const list = Array.isArray(agents) ? [...agents] : [];
-    if (value && value !== "all" && !list.some((agent) => agent.id === value)) {
-      list.unshift({ id: value, name: "Current agent", status: "" });
-    }
-    return list;
-  }, [agents, value]);
+  const options = useMemo(() => (Array.isArray(agents) ? agents : []), [agents]);
 
   const selectValue = value || (allowAll ? "all" : undefined);
   const disabled = loading || saving || (!allowAll && options.length === 0);
