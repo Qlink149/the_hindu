@@ -5,19 +5,19 @@
 @tailwind utilities;
 
 :root {
-    --bg-primary: #0A0A0A;
-    --bg-secondary: #1A1A1A;
-    --bg-tertiary: #262626;
-    --gold: #C5A059;
-    --gold-light: #E5C079;
-    --gold-dim: #8A7039;
-    --text-primary: #EDEDED;
-    --text-secondary: #A1A1AA;
-    --text-muted: #52525B;
-    --success: #059669;
-    --warning: #D97706;
-    --error: #DC2626;
-    --info: #2563EB;
+    --bg-primary: #F3EFE6;
+    --bg-secondary: #FFFFFF;
+    --bg-tertiary: #E8EEF5;
+    --gold: #1B4F8C;
+    --gold-light: #2563A8;
+    --gold-dim: #0D2A4A;
+    --text-primary: #0C1220;
+    --text-secondary: #5C6570;
+    --text-muted: #5C6570;
+    --success: #22B07D;
+    --warning: #F59E0B;
+    --error: #D25F86;
+    --info: #2563A8;
 }
 
 /* Light Mode Colors */
@@ -1621,4 +1621,51 @@ h6 {
 
 .executive-shell .recharts-text {
   fill: var(--chart-axis) !important;
+}
+
+html.executive-shell .surface-elevated,
+html.light-mode .surface-elevated,
+.executive-shell .surface-elevated {
+  background: rgb(255 255 255 / 0.98) !important;
+  border: 1px solid rgb(var(--navy-rgb) / 0.09) !important;
+  box-shadow: 0 24px 48px -12px rgb(var(--navy-rgb) / 0.16) !important;
+  color: var(--executive-text-strong) !important;
+}
+
+html.executive-shell [role="dialog"],
+html.light-mode [role="dialog"] {
+  background: rgb(255 255 255 / 0.98) !important;
+  color: var(--executive-text-strong) !important;
+  border-color: rgb(var(--navy-rgb) / 0.09) !important;
+}
+
+html.executive-shell [data-radix-popper-content-wrapper] > div,
+html.light-mode [data-radix-popper-content-wrapper] > div {
+  background-color: #ffffff !important;
+  border-color: rgb(var(--navy-rgb) / 0.09) !important;
+  color: var(--executive-text-strong) !important;
+}
+
+html.executive-shell .login-page,
+html.light-mode .login-page {
+  background-color: #0A0A0A !important;
+  color: #EDEDED !important;
+}
+
+html.executive-shell .login-page .text-white,
+html.executive-shell .login-page h1,
+html.executive-shell .login-page h2,
+html.executive-shell .login-page h3 {
+  color: #ffffff !important;
+}
+
+html.executive-shell button.bg-emerald-600,
+html.executive-shell button.bg-emerald-500,
+html.executive-shell button.bg-red-700,
+html.executive-shell button.bg-red-600,
+html.light-mode button.bg-emerald-600,
+html.light-mode button.bg-emerald-500,
+html.light-mode button.bg-red-700,
+html.light-mode button.bg-red-600 {
+  color: #ffffff !important;
 }

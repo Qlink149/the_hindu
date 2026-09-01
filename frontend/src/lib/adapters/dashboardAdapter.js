@@ -153,9 +153,16 @@ export function parseProjectsPayload(data) {
 }
 
 /** Build AI Calling URL params for disposition chart drill-down. */
-export function buildAICallingDrillParams(disposition, timeFilter, projectFilter, dateRange) {
+export function buildAICallingDrillParams(
+  disposition,
+  timeFilter,
+  projectFilter,
+  dateRange,
+  agentId
+) {
   const params = new URLSearchParams();
   if (disposition) params.set("disposition", disposition);
+  if (agentId) params.set("agent_id", agentId);
   const statsParams = buildStatsParams(timeFilter, projectFilter, dateRange);
   if (statsParams.start_date) params.set("start_date", statsParams.start_date);
   if (statsParams.end_date) params.set("end_date", statsParams.end_date);

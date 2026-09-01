@@ -20,7 +20,7 @@ export default function AgentSelect({
   allowAll = false,
   placeholder = "Select agent",
   className = "",
-  triggerClassName = "w-[240px] bg-[#1A1A1A] border-white/10 text-white",
+  triggerClassName = "w-[240px] brand-select",
   showIcon = true,
   testId = "agent-select",
 }) {
@@ -49,7 +49,7 @@ export default function AgentSelect({
         >
           <SelectValue placeholder={loading ? "Loading agents…" : placeholder} />
         </SelectTrigger>
-        <SelectContent className="bg-[#1A1A1A] border-white/10 text-white">
+        <SelectContent className="bg-white border-[rgb(var(--navy-rgb)/0.09)] text-[var(--executive-text-strong)]">
           {allowAll ? <SelectItem value="all">All agents</SelectItem> : null}
           {options.map((agent) => (
             <SelectItem key={agent.id} value={agent.id}>

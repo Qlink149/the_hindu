@@ -25,6 +25,7 @@ from ...core.preview_access import (
     preview_disposition,
 )
 from ...utils.lead_call_history import build_lead_call_history_query
+from ...utils.bolna_disposition import extract_bolna_disposition
 from ...services.structured_ai_service import NOT_WORTHY_MESSAGE
 
 logger = logging.getLogger(__name__)
@@ -279,13 +280,16 @@ async def get_lead_calls(lead_id: str, current_user: dict = Depends(get_current_
         ai_worthy = d.get("ai_worthy") is not False
         if not ai_worthy and ai_summary and ai_summary.strip() != NOT_WORTHY_MESSAGE:
             ai_worthy = True
+        disposition = (d.get("disposition") or "").strip()
+        if not disposition:
+            disposition = extract_bolna_disposition(d.get("extracted_data"))
         calls.append({
             "lead_id": lead_id,
             "call_sid": d.get("id") or d.get("call_sid") or "",
             "created_at": created_iso,
             "call_date": call_iso,
             "status": d.get("status", ""),
-            "disposition": d.get("disposition", ""),
+            "disposition": disposition,
             "duration": int(d.get("duration", 0) or 0),
             "recording_url": d.get("recording_url", ""),
             "transcript": d.get("transcript", ""),

@@ -24,7 +24,7 @@ import { api } from "../lib/api";
 import { parseCallTranscriptTurns, WHITELABEL_AGENT_LABEL } from "../utils/callTranscript";
 import { formatDateTimeIST } from "../lib/dateUtils";
 import { isVirtualCustomerLocked, navigateToVirtualCustomer } from "../lib/featureAccess";
-import { getIdacDispositionBadgeClass } from "../lib/idacDispositions";
+import { getIdacDispositionBadgeClass, resolveCallDisposition } from "../lib/idacDispositions";
 import { getCallStatusBadgeClass } from "../lib/callStatusBadges";
 
 const formatDuration = (seconds) => {
@@ -63,6 +63,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [updatingDisposition, setUpdatingDisposition] = useState(false);
+  const disposition = resolveCallDisposition(call);
 
   const handleOpenChange = (next) => {
     if (!next) {
@@ -116,7 +117,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="surface-elevated text-white max-w-3xl w-[calc(100vw-2rem)] h-[min(90vh,820px)] p-0 overflow-hidden flex flex-col gap-0">
+      <DialogContent className="executive-card surface-elevated text-white max-w-3xl w-[calc(100vw-2rem)] h-[min(90vh,820px)] p-0 overflow-hidden flex flex-col gap-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b border-white/10 flex-shrink-0">
           <DialogTitle className="text-white flex items-center gap-3 text-base">
             <PhoneCall className="w-5 h-5 text-[#C5A059]" />
@@ -154,13 +155,13 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs text-[#525252] mb-1">Disposition</p>
-                  {call.disposition ? (
+                  {disposition ? (
                     <span
                       className={`px-2 py-1 rounded text-xs border inline-block truncate max-w-full ${getDispositionBadge(
-                        call.disposition
+                        disposition
                       )}`}
                     >
-                      {call.disposition}
+                      {disposition}
                     </span>
                   ) : (
                     <p className="text-[#A3A3A3]">N/A</p>
@@ -181,7 +182,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                 <Button
                   data-testid="mark-attending-btn"
                   size="sm"
-                  disabled={call.disposition === "Attending" || updatingDisposition}
+                  disabled={disposition === "Attending" || updatingDisposition}
                   onClick={() => updateDisposition(call, "Attending")}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 btn-tactile"
                 >
@@ -190,7 +191,7 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                 <Button
                   data-testid="mark-not-attending-btn"
                   size="sm"
-                  disabled={call.disposition === "Not Attending" || updatingDisposition}
+                  disabled={disposition === "Not Attending" || updatingDisposition}
                   onClick={() => updateDisposition(call, "Not Attending")}
                   className="bg-red-700 hover:bg-red-600 text-white disabled:opacity-40 btn-tactile"
                 >

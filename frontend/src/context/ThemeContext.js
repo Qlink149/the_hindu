@@ -3,45 +3,47 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 const STORAGE_KEY = "darkMode";
 
 const ThemeContext = createContext({
-  darkMode: true,
+  darkMode: false,
   toggleDarkMode: () => {},
   setDarkMode: () => {},
 });
 
 export function readStoredDarkMode() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved !== null ? JSON.parse(saved) : true;
-  } catch {
-    return true;
-  }
+  return false;
 }
 
 export function applyThemeClass(darkMode) {
   const root = document.documentElement;
-  root.classList.toggle("dark-mode", darkMode);
+  root.classList.toggle("dark-mode", Boolean(darkMode));
   root.classList.toggle("light-mode", !darkMode);
+  root.classList.add("executive-shell");
+  const body = document.body;
+  if (body) {
+    body.classList.toggle("dark-mode", Boolean(darkMode));
+    body.classList.toggle("light-mode", !darkMode);
+    body.classList.add("executive-shell");
+  }
 }
 
 export function ThemeProvider({ children }) {
-  const [darkMode, setDarkMode] = useState(readStoredDarkMode);
+  const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(darkMode));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(false));
     } catch {
       /* ignore quota / private mode */
     }
-    applyThemeClass(darkMode);
+    applyThemeClass(false);
   }, [darkMode]);
 
   const toggleDarkMode = useCallback(() => {
-    setDarkMode((prev) => !prev);
+    setDarkMode(false);
   }, []);
 
   const value = useMemo(
-    () => ({ darkMode, setDarkMode, toggleDarkMode }),
-    [darkMode, toggleDarkMode]
+    () => ({ darkMode: false, setDarkMode: () => {}, toggleDarkMode }),
+    [toggleDarkMode]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

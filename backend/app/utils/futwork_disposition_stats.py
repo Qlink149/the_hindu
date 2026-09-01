@@ -214,7 +214,8 @@ async def aggregate_futwork_disposition_stats(
         pipeline.append({"$match": match_query})
     pipeline.extend(
         [
-            {"$group": {"_id": "$disposition", "count": {"$sum": 1}}},
+            {"$addFields": {"_disp": _coalesced_disposition_expr()}},
+            {"$group": {"_id": "$_disp", "count": {"$sum": 1}}},
         ]
     )
 
@@ -228,6 +229,65 @@ async def aggregate_futwork_disposition_stats(
     for label, count in sorted(merged.items(), key=lambda x: (-x[1], x[0])):
         ordered[label] = count
     return ordered
+
+
+def _coalesced_disposition_expr() -> Dict[str, Any]:
+    """Prefer stored disposition, then Bolna attendance leaves by confidence."""
+    return {
+        "$let": {
+            "vars": {
+                "direct": {"$ifNull": ["$disposition", ""]},
+                "attConf": {
+                    "$ifNull": [
+                        "$extracted_data.Attending.Attending.confidence",
+                        {"$ifNull": ["$extracted_data.General.Attending.confidence", 0]},
+                    ]
+                },
+                "nattConf": {
+                    "$ifNull": [
+                        "$extracted_data.Attending.Not Attending.confidence",
+                        {
+                            "$ifNull": [
+                                "$extracted_data.General.Not Attending.confidence",
+                                0,
+                            ]
+                        },
+                    ]
+                },
+            },
+            "in": {
+                "$switch": {
+                    "branches": [
+                        {
+                            "case": {
+                                "$and": [
+                                    {"$ne": ["$$direct", ""]},
+                                    {"$ne": ["$$direct", None]},
+                                ]
+                            },
+                            "then": "$$direct",
+                        },
+                        {
+                            "case": {
+                                "$or": [
+                                    {"$gte": ["$$attConf", 0.5]},
+                                    {"$gte": ["$$nattConf", 0.5]},
+                                ]
+                            },
+                            "then": {
+                                "$cond": [
+                                    {"$gte": ["$$attConf", "$$nattConf"]},
+                                    "Attending",
+                                    "Not Attending",
+                                ]
+                            },
+                        },
+                    ],
+                    "default": "$$direct",
+                }
+            },
+        }
+    }
 
 
 def canonical_disposition_label(label: str) -> str:
@@ -247,17 +307,43 @@ def canonical_disposition_label(label: str) -> str:
     return raw
 
 
+# Nested Bolna extraction paths for The Hindu agent (Attending / Not Attending).
+_BOLNA_NESTED_DISPOSITION_PATHS: Dict[str, List[str]] = {
+    "Attending": [
+        "extracted_data.Attending.Attending.objective",
+        "extracted_data.Attending.Attending.value",
+        "extracted_data.General.Attending.objective",
+        "extracted_data.General.Attending.value",
+    ],
+    "Not Attending": [
+        "extracted_data.Attending.Not Attending.objective",
+        "extracted_data.Attending.Not Attending.value",
+        "extracted_data.General.Not Attending.objective",
+        "extracted_data.General.Not Attending.value",
+    ],
+}
+
+
 def futwork_disposition_exact(value: str) -> Dict[str, Any]:
-    """Match Futwork disposition on call_history (includes label aliases)."""
+    """Match Futwork/Bolna disposition on call_history (includes label aliases)."""
     canonical = canonical_disposition_label(value)
     aliases = DISPOSITION_ALIASES.get(canonical, [canonical])
     unique_aliases = list(dict.fromkeys(aliases))
-    return {
-        "$or": [
-            {"disposition": {"$in": unique_aliases}},
-            {"extracted_data.disposition": {"$in": unique_aliases}},
-        ]
-    }
+    clauses: List[Dict[str, Any]] = [
+        {"disposition": {"$in": unique_aliases}},
+        {"extracted_data.disposition": {"$in": unique_aliases}},
+    ]
+    for path in _BOLNA_NESTED_DISPOSITION_PATHS.get(canonical, []):
+        parent = path.rsplit(".", 1)[0]
+        clauses.append(
+            {
+                "$and": [
+                    {path: {"$in": unique_aliases}},
+                    {f"{parent}.confidence": {"$gte": 0.5}},
+                ]
+            }
+        )
+    return {"$or": clauses}
 
 
 async def count_by_disposition(db, base_query: Dict[str, Any], disposition: str) -> int:
@@ -302,8 +388,9 @@ async def aggregate_avg_duration_by_disposition(
 
     pipeline.extend(
         [
+            {"$addFields": {"_disp": _coalesced_disposition_expr()}},
             {"$group": {
-                "_id": "$disposition", 
+                "_id": "$_disp",
                 "total_duration": {"$sum": "$duration"},
                 "count": {"$sum": 1}
             }},

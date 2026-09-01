@@ -22,7 +22,7 @@ const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const DashboardLayout = lazy(() => import("./components/layout/DashboardLayout"));
 
 const LoadingScreen = () => (
-  <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center">
+  <div className="min-h-screen bg-[#F3EFE6] flex items-center justify-center">
     <p className="text-[#1B4F8C] animate-pulse">Loading...</p>
   </div>
 );

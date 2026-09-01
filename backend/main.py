@@ -33,7 +33,8 @@ from app.api.v1 import (
 from app.models.structured_extraction import StructuredDisposition
 from app.services.campaign_service import CampaignService
 from app.utils.futwork_disposition_stats import futwork_disposition_exact as _futwork_disposition_exact
-from app.utils.futwork_disposition_stats import canonical_disposition_label
+from app.utils.futwork_disposition_stats import canonical_disposition_label, IDAC_DISPOSITION_ORDER
+from app.utils.bolna_disposition import extract_bolna_disposition
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -375,12 +376,16 @@ def _call_history_filter_query(
 
 def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
     campaign_name = doc.get("campaign", "") or "Default Campaign"
+    extracted = doc.get("extracted_data") or doc.get("extractedData")
+    disposition = (doc.get("disposition") or "").strip()
+    if not disposition:
+        disposition = extract_bolna_disposition(extracted)
     return {
         "id": doc.get("id", doc.get("call_sid", "")),
         "customer_name": doc.get("customer_name", "Unknown"),
         "phone": doc.get("phone", "") or doc.get("mobile_digits", ""),
         "status": doc.get("status", ""),
-        "disposition": doc.get("disposition", ""),
+        "disposition": disposition,
         "duration": int(doc.get("duration", 0) or 0),
         "recording_url": doc.get("recording_url", ""),
         "transcript": doc.get("transcript", ""),
@@ -391,6 +396,7 @@ def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "lead_id": doc.get("lead_id", ""),
         "direction": "outbound",
         "hangup_by": "bot",
+        "extracted_data": extracted if isinstance(extracted, dict) else {},
     }
 
 
@@ -419,13 +425,19 @@ async def get_call_history_filters(db=Depends(get_db)):
                 if d is not None and str(d).strip()
             }
         )
+        seen = set()
+        dispositions_ordered: List[str] = []
+        for label in list(IDAC_DISPOSITION_ORDER) + dispositions:
+            if label and label not in seen:
+                seen.add(label)
+                dispositions_ordered.append(label)
 
         upload_batches = await CampaignService(db).list_upload_batches_for_filters(limit=100)
 
         return {
             "campaigns": campaigns_merged,
             "statuses": statuses,
-            "dispositions": dispositions,
+            "dispositions": dispositions_ordered,
             "upload_batches": upload_batches,
         }
     except Exception as e:

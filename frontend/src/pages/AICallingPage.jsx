@@ -51,6 +51,7 @@ import {
 import {
   IDAC_DISPOSITION_FILTER_OPTIONS,
   getIdacDispositionBadgeClass,
+  resolveCallDisposition,
 } from "../lib/idacDispositions";
 import { getCallStatusBadgeClass } from "../lib/callStatusBadges";
 
@@ -97,6 +98,7 @@ const StatusIcon = ({ status }) => {
 // -----------------------------------------------------------------------------
 const CallRow = memo(
   function CallRow({ call, onSelect, style }) {
+    const disposition = resolveCallDisposition(call);
     return (
       <div
         style={style}
@@ -133,14 +135,16 @@ const CallRow = memo(
 
         {/* Disposition */}
         <div className="min-w-0">
-          {call.disposition && (
+          {disposition ? (
             <span
               className={`px-2 py-1 rounded text-xs border inline-block truncate max-w-full ${getDispositionBadge(
-                call.disposition
+                disposition
               )}`}
             >
-              {call.disposition}
+              {disposition}
             </span>
+          ) : (
+            <span className="text-xs text-[#A3A3A3]">N/A</span>
           )}
         </div>
 
@@ -179,6 +183,7 @@ const CallRow = memo(
     return (
       a.id === b.id &&
       a.disposition === b.disposition &&
+      a.extracted_data === b.extracted_data &&
       a.status === b.status &&
       a.duration === b.duration &&
       a.customer_name === b.customer_name &&
@@ -283,6 +288,7 @@ const AICallingPage = () => {
     const q = searchParams.get("q") || searchParams.get("phone") || "";
     if (q) setSearchQuery(q);
     if (searchParams.get("disposition")) setDispositionFilter(searchParams.get("disposition"));
+    if (searchParams.get("agent_id")) setAgentFilter(searchParams.get("agent_id"));
 
     const startDate = searchParams.get("start_date");
     const endDate = searchParams.get("end_date");
@@ -463,9 +469,9 @@ const AICallingPage = () => {
   const fallbackStatuses = ["completed", "no-answer", "busy", "failed"];
   const fallbackDispositions = IDAC_DISPOSITION_FILTER_OPTIONS;
   const statusList = statusOptions.length ? statusOptions : fallbackStatuses;
-  const dispositionList = dispositionOptions.length
-    ? dispositionOptions
-    : fallbackDispositions;
+  const dispositionList = Array.from(
+    new Set([...(dispositionOptions || []), ...fallbackDispositions])
+  );
 
   const handleResetFilters = useCallback(() => {
     setSelectedCampaign("all");

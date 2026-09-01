@@ -21,6 +21,8 @@ from ...models.campaign import (
     TestCallRequest,
 )
 from ...services.campaign_service import CampaignService
+from ...services.bolna_agents import list_bolna_agents
+from ...utils.bolna_disposition import extract_bolna_disposition
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,6 +66,22 @@ async def get_current_campaign(
         except Exception:
             logger.exception("get_current_campaign: aggregation failed")
             raise HTTPException(status_code=500, detail="Failed to refresh call statistics")
+
+    agent_id = str(doc.get("agent_id") or "").strip()
+    if agent_id:
+        try:
+            agents = await list_bolna_agents()
+            match = next((a for a in agents if a.get("id") == agent_id), None)
+            live_name = str((match or {}).get("name") or "").strip()
+            if live_name and live_name != str(doc.get("agent_name") or "").strip():
+                await db.campaigns.update_one(
+                    {"id": doc["id"]},
+                    {"$set": {"agent_name": live_name, "agent": live_name}},
+                )
+                doc["agent_name"] = live_name
+                doc["agent"] = live_name
+        except Exception:
+            logger.exception("get_current_campaign: failed to refresh Bolna agent name")
 
     return service.build_current_response(doc, live_override=live_override)
 
@@ -467,6 +485,8 @@ async def get_campaign_calls(campaign_id: str, db=Depends(get_db)):
         call_obj = dict(d)
         # Extract summary from webhook payload
         call_obj["ai_call_summary"] = d.get("extracted_data", {}).get("call_summary", "")
+        if not (call_obj.get("disposition") or "").strip():
+            call_obj["disposition"] = extract_bolna_disposition(d.get("extracted_data"))
         calls.append(call_obj)
 
     # If no calls in call_history, check leads collection

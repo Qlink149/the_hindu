@@ -16,6 +16,7 @@ from ...utils.csv_processor import normalize_phone
 from ...utils.lead_qualification_tags import apply_canonical_tags_to_lead_patch
 from ...utils.context_updates import persist_lead_context_updates
 from ...utils.orphan_call_link import ensure_lead_for_unmatched_webhook
+from ...utils.bolna_disposition import extract_bolna_disposition
 from ...utils.webhook_lead import (
     call_history_lead_id_value,
     has_webhook_id_hints,
@@ -164,25 +165,6 @@ def _first_str(*values: Any) -> str:
     return ""
 
 
-def _extract_bolna_disposition(extracted: Any) -> str:
-    """Best-effort disposition from Bolna extracted_data (nested or flat)."""
-    if not isinstance(extracted, dict):
-        return ""
-    for key in ("disposition", "Disposition", "call_disposition", "Call Disposition"):
-        val = extracted.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        if isinstance(val, dict):
-            for inner_key in ("value", "label", "subjective"):
-                inner = val.get(inner_key)
-                if isinstance(inner, str) and inner.strip():
-                    return inner.strip()
-    general = extracted.get("General")
-    if isinstance(general, dict):
-        nested = _extract_bolna_disposition(general)
-        if nested:
-            return nested
-    return ""
 
 
 def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -196,6 +178,8 @@ def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         or raw.get("userData")
     )
     extracted = raw.get("extracted_data") if raw.get("extracted_data") is not None else raw.get("extractedData")
+    if not extracted:
+        extracted = raw.get("custom_extractions") or raw.get("agent_extraction")
     execution_id = _first_str(
         raw.get("id"),
         raw.get("execution_id"),
@@ -240,7 +224,7 @@ def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "agentId": _first_str(raw.get("agent_id"), raw.get("agentId"), settings.BOLNA_AGENT_ID),
         "status": _first_str(raw.get("status")),
         "transcript": raw.get("transcript") or "",
-        "disposition": _extract_bolna_disposition(extracted),
+        "disposition": extract_bolna_disposition(extracted),
         "extractedData": extracted,
         "telephonyData": {
             "duration": duration,
@@ -281,8 +265,10 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
     agent_id       = data.get("agentId", "")
     status_raw     = data.get("status", "") or ""
     transcript     = data.get("transcript", "")
-    disposition    = (data.get("disposition") or "").strip()
     extracted_data = data.get("extractedData")
+    disposition = (data.get("disposition") or "").strip()
+    if not disposition:
+        disposition = extract_bolna_disposition(extracted_data)
 
     # ---- Dedup precondition: require callSid --------------------------------
     if not call_sid:

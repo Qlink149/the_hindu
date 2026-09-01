@@ -91,3 +91,62 @@ export function normalizeDispositionChartLabel(key) {
   if (raw === "No Answer") return "NA";
   return raw;
 }
+
+function nestedLeaf(extracted, ...path) {
+  let node = extracted;
+  for (const key of path) {
+    if (!node || typeof node !== "object") return null;
+    node = node[key];
+  }
+  return node && typeof node === "object" ? node : null;
+}
+
+function leafConfidence(node) {
+  const n = Number(node?.confidence);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Resolve Attending / Not Attending from call.disposition or Bolna extracted_data. */
+export function resolveCallDisposition(call) {
+  const direct = String(call?.disposition || "").trim();
+  if (direct) return direct;
+  const extracted = call?.extracted_data || call?.extractedData;
+  if (!extracted || typeof extracted !== "object") return "";
+
+  const att =
+    nestedLeaf(extracted, "Attending", "Attending") ||
+    nestedLeaf(extracted, "General", "Attending");
+  const natt =
+    nestedLeaf(extracted, "Attending", "Not Attending") ||
+    nestedLeaf(extracted, "General", "Not Attending");
+  const attConf = leafConfidence(att);
+  const nattConf = leafConfidence(natt);
+  if (attConf >= 0.5 || nattConf >= 0.5) {
+    return attConf >= nattConf ? "Attending" : "Not Attending";
+  }
+
+  const summary = String(
+    nestedLeaf(extracted, "General", "Call Summary")?.subjective || ""
+  ).toLowerCase();
+  if (!summary) return "";
+  if (
+    ["will not attend", "not attending", "not interested", "declined", "said no"].some((h) =>
+      summary.includes(h)
+    )
+  ) {
+    return "Not Attending";
+  }
+  if (
+    [
+      "expressed interest in attending",
+      "confirmed attendance",
+      "will attend",
+      "agreed to attend",
+      "user expressed interest",
+      "user confirmed",
+    ].some((h) => summary.includes(h))
+  ) {
+    return "Attending";
+  }
+  return "";
+}

@@ -225,7 +225,8 @@ const DashboardPage = () => {
       disposition,
       timeFilter,
       "all",
-      dateRange
+      dateRange,
+      selectedAgentId
     );
     navigate(`/ai-calling?${params.toString()}`);
   };
@@ -236,7 +237,8 @@ const DashboardPage = () => {
       disposition,
       timeFilter,
       "all",
-      dateRange
+      dateRange,
+      selectedAgentId
     );
     navigate(`/ai-calling?${params.toString()}`);
   };
