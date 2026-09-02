@@ -132,7 +132,7 @@ const LoginPage = () => {
               <div className="login-logo-badge">
                 <BrandLogo
                   variant="sidebar"
-                  darkBackground={false}
+                  darkBackground
                   className="h-12 max-w-[11.5rem]"
                   testId="login-logo"
                 />

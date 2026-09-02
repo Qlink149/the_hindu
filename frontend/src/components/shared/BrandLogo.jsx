@@ -8,21 +8,23 @@ const VARIANT_CLASS = {
 };
 
 /**
- * Official The Hindu wordmark (blue type on black). Displayed as-is — the
- * asset already includes its own black field, so it is not inverted or badged.
+ * Official The Hindu wordmark. On dark surfaces (`darkBackground`), invert to a
+ * light mark. On light surfaces, show the asset as-is.
  */
 export default function BrandLogo({
   variant = "sidebar",
   className = "",
-  darkBackground: _darkBackground = true,
+  darkBackground = false,
   testId,
 }) {
-  const src = BRAND.logoDarkUrl || BRAND.logoUrl;
+  const src = darkBackground
+    ? BRAND.logoDarkUrl || BRAND.logoUrl
+    : BRAND.logoUrl || BRAND.logoDarkUrl;
 
   if (!src) {
     return (
       <span
-        className={`font-serif font-bold tracking-wider ${className}`}
+        className={`font-serif font-bold tracking-wider ${darkBackground ? "text-white" : ""} ${className}`.trim()}
         data-testid={testId}
       >
         {BRAND.name}
@@ -34,7 +36,7 @@ export default function BrandLogo({
     <img
       src={src}
       alt={BRAND.logoAlt}
-      className={`rounded-lg ${VARIANT_CLASS[variant] || VARIANT_CLASS.sidebar} ${className}`.trim()}
+      className={`rounded-lg ${VARIANT_CLASS[variant] || VARIANT_CLASS.sidebar} ${darkBackground ? "brightness-0 invert" : ""} ${className}`.trim()}
       data-testid={testId}
     />
   );
