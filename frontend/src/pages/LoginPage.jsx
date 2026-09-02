@@ -64,7 +64,7 @@ const LoginPage = () => {
 
       <main className="grid min-h-screen lg:grid-cols-[1.05fr_0.95fr]">
         <section
-          className="relative hidden min-h-screen overflow-hidden px-10 py-10 text-white lg:flex lg:flex-col lg:justify-between"
+          className="login-hero relative hidden min-h-screen overflow-hidden px-10 py-10 text-white lg:flex lg:flex-col lg:justify-between"
           style={{
             background: `
               radial-gradient(ellipse 66% 56% at 92% 6%, rgba(74,122,181,0.85) 0%, rgba(37,99,168,0.55) 26%, rgba(27,79,140,0.32) 52%, transparent 70%),

@@ -90,19 +90,14 @@
 }
 
 /*
- * Login page: always dark cinematic UI (saved light-mode preference
- * applies after sign-in; global .light-mode overrides break this layout).
+ * Login page: cinematic left column stays dark. Do not force white type
+ * onto the light form card (global .light-mode / .executive-shell overrides).
  */
-.light-mode .login-page {
-    background-color: #0A0A0A !important;
-    color: #EDEDED !important;
-}
-
-.light-mode .login-page .bg-\[\#0A0A0A\] {
+.light-mode .login-page .login-hero.bg-\[\#0A0A0A\] {
     background-color: #0A0A0A !important;
 }
 
-.light-mode .login-page .bg-\[\#1A1A1A\] {
+.light-mode .login-page .login-hero .bg-\[\#1A1A1A\] {
     background-color: #1A1A1A !important;
 }
 
@@ -123,44 +118,32 @@
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
 }
 
-.light-mode .login-page h1,
-.light-mode .login-page .text-\[\#EDEDED\] {
+.light-mode .login-page .login-hero h1,
+.light-mode .login-page .login-hero .text-\[\#EDEDED\] {
     color: #EDEDED !important;
 }
 
-.light-mode .login-page .text-\[\#A1A1AA\] {
+.light-mode .login-page .login-hero .text-\[\#A1A1AA\] {
     color: #A1A1AA !important;
 }
 
-.light-mode .login-page .text-\[\#52525B\] {
+.light-mode .login-page .login-hero .text-\[\#52525B\] {
     color: #52525B !important;
 }
 
-.light-mode .login-page .text-white {
+.light-mode .login-page .login-hero .text-white {
     color: #FFFFFF !important;
 }
 
-.light-mode .login-page .bg-black\/50 {
+.light-mode .login-page .login-hero .bg-black\/50 {
     background-color: rgba(0, 0, 0, 0.5) !important;
 }
 
-.light-mode .login-page .border-white\/20 {
+.light-mode .login-page .login-hero .border-white\/20 {
     border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
-.light-mode .login-page input,
-.light-mode .login-page textarea {
-    background-color: rgba(0, 0, 0, 0.5) !important;
-    border-color: rgba(255, 255, 255, 0.2) !important;
-    color: #FFFFFF !important;
-}
-
-.light-mode .login-page input::placeholder,
-.light-mode .login-page textarea::placeholder {
-    color: #71717A !important;
-}
-
-.light-mode .login-page .hover\:text-white:hover {
+.light-mode .login-page .login-hero .hover\:text-white:hover {
     color: #FFFFFF !important;
 }
 
@@ -1409,7 +1392,7 @@ h6 {
     radial-gradient(circle at 78% 18%, rgb(var(--lavender-rgb) / 0.20), transparent 34rem),
     radial-gradient(circle at 82% 88%, rgb(var(--success-rgb) / 0.13), transparent 28rem),
     #F3EFE6 !important;
-  color: var(--executive-text-strong) !important;
+  color: #0C1220 !important;
 }
 
 .login-form-panel {
@@ -1443,36 +1426,45 @@ h6 {
 
 .login-page .login-title,
 .light-mode .login-page .login-title,
-.dark-mode .login-page .login-title {
-  color: var(--executive-text-strong) !important;
+.dark-mode .login-page .login-title,
+html.executive-shell .login-page .login-title,
+html.light-mode .login-page .login-title {
+  color: #0C1220 !important;
 }
 
 .login-page .login-copy,
-.login-page .login-label,
 .light-mode .login-page .login-copy,
-.light-mode .login-page .login-label,
 .dark-mode .login-page .login-copy,
-.dark-mode .login-page .login-label {
-  color: var(--executive-text-muted) !important;
+html.executive-shell .login-page .login-copy,
+html.light-mode .login-page .login-copy {
+  color: #5C6570 !important;
 }
 
-.login-page .login-label {
-  color: color-mix(in srgb, var(--executive-text-strong) 82%, var(--executive-text-muted)) !important;
+.login-page .login-label,
+.light-mode .login-page .login-label,
+.dark-mode .login-page .login-label,
+html.executive-shell .login-page .login-label,
+html.light-mode .login-page .login-label {
+  color: #0C1220 !important;
 }
 
 .login-page .login-input,
 .light-mode .login-page .login-input,
-.dark-mode .login-page .login-input {
+.dark-mode .login-page .login-input,
+html.executive-shell .login-page .login-input,
+html.light-mode .login-page .login-input {
   border: 1px solid rgb(var(--navy-rgb) / 0.12) !important;
   background: rgb(255 255 255 / 0.96) !important;
-  color: var(--executive-text-strong) !important;
+  color: #0C1220 !important;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.64), 0 1px 2px rgb(var(--navy-rgb) / 0.03) !important;
 }
 
 .login-page .login-input::placeholder,
 .light-mode .login-page .login-input::placeholder,
-.dark-mode .login-page .login-input::placeholder {
-  color: rgb(var(--muted-rgb) / 0.58) !important;
+.dark-mode .login-page .login-input::placeholder,
+html.executive-shell .login-page .login-input::placeholder,
+html.light-mode .login-page .login-input::placeholder {
+  color: #8A93A0 !important;
 }
 
 .login-page .login-input:focus,
@@ -1646,16 +1638,15 @@ html.light-mode [data-radix-popper-content-wrapper] > div {
   color: var(--executive-text-strong) !important;
 }
 
-html.executive-shell .login-page,
-html.light-mode .login-page {
-  background-color: #0A0A0A !important;
+html.executive-shell .login-hero,
+html.light-mode .login-hero {
   color: #EDEDED !important;
 }
 
-html.executive-shell .login-page .text-white,
-html.executive-shell .login-page h1,
-html.executive-shell .login-page h2,
-html.executive-shell .login-page h3 {
+html.executive-shell .login-hero .text-white,
+html.executive-shell .login-hero h1,
+html.executive-shell .login-hero h2,
+html.executive-shell .login-hero h3 {
   color: #ffffff !important;
 }
 
