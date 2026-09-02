@@ -44,15 +44,10 @@ AGENT_ACTIVE_DISPOSITIONS = ["Attending", "Not Attending"]
 _BATCH_LEAD_CAP = 10000
 _CALL_EXPORT_CAP = 10000
 _CALL_EXPORT_COLUMNS = [
-    ("customer_name", "Customer"),
-    ("phone", "Phone"),
-    ("created_at", "Timestamp"),
-    ("duration", "Duration (seconds)"),
+    ("customer_name", "Customer name"),
+    ("phone", "Phone number"),
     ("disposition", "Disposition"),
-    ("status", "Status"),
-    ("upload_batch_name", "Batch"),
     ("id", "Call ID"),
-    ("recording_url", "Recording URL"),
 ]
 
 # Configure logging
