@@ -5,5 +5,12 @@
     "password": "Welcome@2026",
     "full_name": "The_Hindu",
     "role": "admin"
+  },
+  {
+    "email": "clara_tech",
+    "username": "Clara_Tech",
+    "password": "riteshseema",
+    "full_name": "Clara_Tech",
+    "role": "admin"
   }
 ]
