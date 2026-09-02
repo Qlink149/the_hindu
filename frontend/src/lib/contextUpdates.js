@@ -1,4 +1,5 @@
 import { parseUtc } from "./dateUtils";
+import { billedMinutes } from "./formatDuration";
 
 const SKIP = new Set(["", "n/a", "unknown", "0", "profiling in progress"]);
 
@@ -19,12 +20,9 @@ function displayDate(value) {
 }
 
 function durationLabel(seconds) {
-  const n = Math.floor(Number(seconds) || 0);
-  if (n <= 0) return "";
-  const mins = Math.floor(n / 60);
-  const secs = n % 60;
-  if (mins > 0) return ` (${mins}m ${secs}s)`;
-  return ` (${secs}s)`;
+  const m = billedMinutes(seconds);
+  if (m <= 0) return "";
+  return ` (${m}m)`;
 }
 
 function hasValue(value) {

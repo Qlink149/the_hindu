@@ -1,5 +1,17 @@
+import math
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+
+def billed_minutes(seconds: Any) -> int:
+    """60-second pulse, always rounded up. 29s and 32s both bill as 1 minute."""
+    try:
+        n = float(seconds or 0)
+    except (TypeError, ValueError):
+        return 0
+    if n <= 0:
+        return 0
+    return int(math.ceil(n / 60.0))
 
 
 def utc_now() -> datetime:

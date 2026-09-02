@@ -53,6 +53,7 @@ import {
   resolveCallDisposition,
 } from "../lib/idacDispositions";
 import { getCallStatusBadgeClass } from "../lib/callStatusBadges";
+import { formatDuration } from "../lib/formatDuration";
 
 const PAGE_SIZE = 50;
 const ROW_HEIGHT = 64; // px, matches the grid row's effective height
@@ -62,14 +63,6 @@ const LIST_MIN_HEIGHT = ROW_HEIGHT * VISIBLE_ROWS;
 // -----------------------------------------------------------------------------
 // Module-scope helpers (pure, never re-allocated per render)
 // -----------------------------------------------------------------------------
-
-const formatDuration = (seconds) => {
-  if (!seconds) return "0s";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
-};
 
 const formatDate = (dateStr) =>
   formatDateTimeIST(dateStr, { second: "2-digit", hour12: true });

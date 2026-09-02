@@ -24,7 +24,7 @@ from ...utils.webhook_lead import (
     lead_update_filter,
     resolve_lead_for_webhook,
 )
-from ...core.time_utils import utc_now
+from ...core.time_utils import billed_minutes, utc_now
 from ...services.notification_service import create_notification, _lead_display_name
 from ...services.structured_ai_service import (
     StructuredAIService,
@@ -144,7 +144,7 @@ async def _notify_ai_call_summary(
         db,
         type="ai_call_summary",
         title="AI Call Summary",
-        message=summary or f"High-intent call ({duration_seconds or 0}s)",
+        message=summary or f"High-intent call ({billed_minutes(duration_seconds)}m)",
         lead_id=lead_row["id"],
         lead_name=_lead_display_name(lead_row),
         recipient_user_id=lead_row["assigned_user_id"],

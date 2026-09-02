@@ -26,14 +26,7 @@ import { formatDateTimeIST } from "../lib/dateUtils";
 import { isVirtualCustomerLocked, navigateToVirtualCustomer } from "../lib/featureAccess";
 import { getIdacDispositionBadgeClass, resolveCallDisposition } from "../lib/idacDispositions";
 import { getCallStatusBadgeClass } from "../lib/callStatusBadges";
-
-const formatDuration = (seconds) => {
-  if (!seconds) return "0s";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
-};
+import { formatDuration, formatPlaybackClock } from "../lib/formatDuration";
 
 const formatDate = (dateStr) =>
   formatDateTimeIST(dateStr, { second: "2-digit", hour12: true });
@@ -281,10 +274,10 @@ const CallDetailDialog = ({ open, onOpenChange, call, onDispositionChange }) => 
                     </div>
                     <div className="flex justify-between mt-1">
                       <span className="text-xs text-[#A3A3A3] tabular-nums">
-                        {formatDuration(Math.floor(audioProgress))}
+                        {formatPlaybackClock(Math.floor(audioProgress))}
                       </span>
                       <span className="text-xs text-[#A3A3A3] tabular-nums">
-                        {formatDuration(Math.floor(audioDuration))}
+                        {formatPlaybackClock(Math.floor(audioDuration))}
                       </span>
                     </div>
                   </div>

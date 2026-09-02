@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { Button } from "./ui/button";
-import { formatDuration } from "../lib/formatDuration";
+import { formatPlaybackClock } from "../lib/formatDuration";
 
 /**
  * Compact seekable player for call recordings (avoids native controls overflow).
@@ -69,8 +69,8 @@ export default function CallRecordingPlayer({ src, testId }) {
             />
           </div>
           <div className="flex justify-between mt-1">
-            <span className="text-xs text-[#A3A3A3] tabular-nums">{formatDuration(Math.floor(progress))}</span>
-            <span className="text-xs text-[#A3A3A3] tabular-nums">{formatDuration(Math.floor(duration))}</span>
+            <span className="text-xs text-[#A3A3A3] tabular-nums">{formatPlaybackClock(Math.floor(progress))}</span>
+            <span className="text-xs text-[#A3A3A3] tabular-nums">{formatPlaybackClock(Math.floor(duration))}</span>
           </div>
         </div>
       </div>

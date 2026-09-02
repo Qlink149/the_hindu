@@ -14,7 +14,7 @@ from ...core.database import get_db
 
 from ...core.security import get_current_user
 
-from ...core.time_utils import iso_utc_now, utc_now
+from ...core.time_utils import billed_minutes, iso_utc_now, utc_now
 
 from ...services.assignment_service import rep_lead_filter
 from ...services.notification_service import sanitize_notification_text
@@ -370,7 +370,7 @@ async def _build_auto_notifications(
 
         if not summary:
 
-            summary = f"High-intent call ({call.get('duration', 0)}s)"
+            summary = f"High-intent call ({billed_minutes(call.get('duration', 0))}m)"
 
         auto.append(
 

@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ..core.time_utils import serialize_datetime_utc
+from ..core.time_utils import billed_minutes, serialize_datetime_utc
 from .lead_call_history import build_lead_call_history_query
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,10 @@ def _has_meaningful(value: Any) -> bool:
 
 
 def _duration_label(seconds: int) -> str:
-    n = int(seconds or 0)
-    if n <= 0:
+    mins = billed_minutes(seconds)
+    if mins <= 0:
         return ""
-    mins, secs = divmod(n, 60)
-    if mins > 0:
-        return f" ({mins}m {secs}s)"
-    return f" ({secs}s)"
+    return f" ({mins}m)"
 
 
 def _entry(
