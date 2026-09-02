@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import re
 import uvicorn
 from datetime import datetime, timedelta, timezone
@@ -7,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import logging
 
 from app.core.config import settings
@@ -39,6 +42,18 @@ from app.utils.webhook_lead import is_placeholder_customer_name
 
 AGENT_ACTIVE_DISPOSITIONS = ["Attending", "Not Attending"]
 _BATCH_LEAD_CAP = 10000
+_CALL_EXPORT_CAP = 10000
+_CALL_EXPORT_COLUMNS = [
+    ("customer_name", "Customer"),
+    ("phone", "Phone"),
+    ("created_at", "Timestamp"),
+    ("duration", "Duration (seconds)"),
+    ("disposition", "Disposition"),
+    ("status", "Status"),
+    ("upload_batch_name", "Batch"),
+    ("id", "Call ID"),
+    ("recording_url", "Recording URL"),
+]
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -1030,6 +1045,198 @@ async def get_call_history_by_id(call_id: str, db=Depends(get_db)):
     raise HTTPException(status_code=404, detail="Call not found")
 
 
+async def _fetch_filtered_calls(
+    db,
+    *,
+    campaign: Optional[str],
+    status: Optional[str],
+    disposition: Optional[str],
+    q: Optional[str],
+    upload_batch_id: Optional[str],
+    leadId: Optional[str],
+    mobile_digits: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    agent_id: Optional[str],
+    skip_n: int,
+    limit_n: int,
+) -> tuple[List[Dict[str, Any]], int]:
+    """Same matching rules as the AI Calling list, for one page or a full export."""
+    lead_clause = await _call_history_lead_id_clause(db, leadId) if leadId else None
+    batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
+    ch_query = _call_history_filter_query(
+        campaign,
+        status,
+        disposition,
+        q,
+        extra_clause=batch_clause,
+        lead_id=leadId,
+        mobile_digits=mobile_digits,
+        start_date=start_date,
+        end_date=end_date,
+        agent_id=agent_id,
+        lead_id_clause=lead_clause,
+    )
+
+    calls: List[Dict[str, Any]] = []
+    total = 0
+    call_history_collection_used = await db.call_history.count_documents({}) > 0
+    uid = (upload_batch_id or "").strip()
+    use_batch_leads = bool(uid) and uid != "all" and not leadId
+
+    if use_batch_leads:
+        calls, total = await _list_batch_lead_call_rows(
+            db,
+            upload_batch_id=uid,
+            status=status,
+            disposition=disposition,
+            search=q,
+            skip_n=skip_n,
+            limit_n=limit_n,
+            agent_id=agent_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return calls, total
+
+    if call_history_collection_used:
+        total = await db.call_history.count_documents(ch_query)
+        ch_docs = await (
+            db.call_history.find(ch_query, {"_id": 0})
+            .sort("created_at", -1)
+            .skip(skip_n)
+            .limit(limit_n)
+            .to_list(limit_n)
+        )
+        for doc in ch_docs:
+            calls.append(_doc_to_call_row(doc))
+        calls = await _enrich_call_rows_from_leads(db, calls)
+        return calls, total
+
+    legacy_parts: List[Dict[str, Any]] = [
+        {
+            "$or": [
+                {"call_status": {"$nin": ["", None]}},
+                {"recording_url": {"$nin": ["", None]}},
+            ]
+        }
+    ]
+    if campaign and campaign != "all":
+        legacy_parts.append({"campaign_name": campaign})
+    if disposition and disposition != "all":
+        legacy_parts.append(_futwork_disposition_exact(canonical_disposition_label(disposition)))
+    if status and status != "all":
+        legacy_parts.append(
+            {"$or": [{"call_status": {"$regex": f"^{status}$", "$options": "i"}}]}
+        )
+
+    sq = (q or "").strip()
+    if sq:
+        esc = re.escape(sq)
+        digits = re.sub(r"\D+", "", sq)
+        ors = [
+            {"full_name": {"$regex": esc, "$options": "i"}},
+            {"mobile": {"$regex": esc, "$options": "i"}},
+            {"client_lead_id": {"$regex": esc, "$options": "i"}},
+        ]
+        if digits:
+            ors.append({"mobile_digits": {"$regex": digits}})
+        legacy_parts.append({"$or": ors})
+
+    legacy_date = _legacy_lead_date_clause(start_date, end_date)
+    if legacy_date:
+        legacy_parts.append(legacy_date)
+
+    base_query = _and_queries(*legacy_parts)
+    total = await db.leads.count_documents(base_query)
+    leads_data = await (
+        db.leads.find(base_query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip_n)
+        .limit(limit_n)
+        .to_list(limit_n)
+    )
+    for lead in leads_data:
+        call_status = lead.get("call_status", "") or "completed"
+        campaign_name = lead.get("campaign_name", "") or "Default Campaign"
+        calls.append(
+            {
+                "id": lead.get("id", ""),
+                "customer_name": _lead_display_name(lead),
+                "phone": _display_phone(lead.get("mobile"), lead.get("mobile_digits")),
+                "status": call_status,
+                "disposition": lead.get("disposition", ""),
+                "duration": int(lead.get("call_duration", 0) or 0),
+                "recording_url": lead.get("recording_url", ""),
+                "transcript": lead.get("transcript", ""),
+                "created_at": serialize_datetime_utc(
+                    lead.get("call_date") or lead.get("created_at")
+                ),
+                "campaign": campaign_name,
+                "lead_id": lead.get("id", ""),
+                "direction": "outbound",
+                "hangup_by": "bot",
+            }
+        )
+    return calls, total
+
+
+def _call_history_csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
+    out = io.StringIO()
+    out.write("\ufeff")
+    writer = csv.writer(out)
+    writer.writerow([label for _, label in _CALL_EXPORT_COLUMNS])
+    for row in rows:
+        writer.writerow(
+            ["" if row.get(key) is None else str(row.get(key, "")) for key, _ in _CALL_EXPORT_COLUMNS]
+        )
+    return out.getvalue().encode("utf-8")
+
+
+@app.get("/api/call-history/export", dependencies=_auth_dep)
+async def export_call_history(
+    campaign: str = None,
+    status: str = None,
+    disposition: str = None,
+    q: str = None,
+    upload_batch_id: str = None,
+    leadId: str = None,
+    mobile_digits: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    agent_id: str = None,
+    db=Depends(get_db),
+):
+    """CSV of every call matching the same filters as GET /api/call-history."""
+    try:
+        calls, _total = await _fetch_filtered_calls(
+            db,
+            campaign=campaign,
+            status=status,
+            disposition=disposition,
+            q=q,
+            upload_batch_id=upload_batch_id,
+            leadId=leadId,
+            mobile_digits=mobile_digits,
+            start_date=start_date,
+            end_date=end_date,
+            agent_id=agent_id,
+            skip_n=0,
+            limit_n=_CALL_EXPORT_CAP,
+        )
+    except Exception:
+        logger.exception("Error exporting call history")
+        raise HTTPException(status_code=500, detail="Failed to export call history")
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    filename = f"ai-calling-{stamp}.csv"
+    return StreamingResponse(
+        iter([_call_history_csv_bytes(calls)]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/call-history", dependencies=_auth_dep)
 async def get_call_history(
     campaign: str = None,
@@ -1053,23 +1260,6 @@ async def get_call_history(
     only when call_history is empty for this deployment.
     """
     try:
-        lead_clause = await _call_history_lead_id_clause(db, leadId) if leadId else None
-        batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
-        ch_query = _call_history_filter_query(
-            campaign,
-            status,
-            disposition,
-            q,
-            extra_clause=batch_clause,
-            lead_id=leadId,
-            mobile_digits=mobile_digits,
-            start_date=start_date,
-            end_date=end_date,
-            agent_id=agent_id,
-            lead_id_clause=lead_clause,
-        )
-
-        # Legacy: offset/limit when page not used explicitly (limit>0 and page is default)
         use_legacy_pagination = limit > 0 and page == 1 and size == 50
         if use_legacy_pagination:
             skip_n = offset
@@ -1080,120 +1270,27 @@ async def get_call_history(
             skip_n = (page - 1) * size
             limit_n = size
 
-        calls: List[Dict[str, Any]] = []
-        total = 0
-        has_more = False
-        effective_page = page if not use_legacy_pagination else 1
-        effective_size = limit_n if use_legacy_pagination else size
-
-        call_history_collection_used = await db.call_history.count_documents({}) > 0
-        uid = (upload_batch_id or "").strip()
-        use_batch_leads = bool(uid) and uid != "all" and not leadId
-
-        if use_batch_leads:
-            calls, total = await _list_batch_lead_call_rows(
-                db,
-                upload_batch_id=uid,
-                status=status,
-                disposition=disposition,
-                search=q,
-                skip_n=skip_n,
-                limit_n=limit_n,
-                agent_id=agent_id,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            has_more = skip_n + len(calls) < total
-        elif call_history_collection_used:
-            total = await db.call_history.count_documents(ch_query)
-            ch_cursor = (
-                db.call_history.find(ch_query, {"_id": 0})
-                .sort("created_at", -1)
-                .skip(skip_n)
-                .limit(limit_n)
-            )
-            ch_docs = await ch_cursor.to_list(limit_n)
-            has_more = skip_n + len(ch_docs) < total
-
-            for doc in ch_docs:
-                calls.append(_doc_to_call_row(doc))
-            calls = await _enrich_call_rows_from_leads(db, calls)
-        else:
-            # Legacy embedded call data on leads — only when call_history collection is empty
-            legacy_parts: List[Dict[str, Any]] = [
-                {
-                    "$or": [
-                        {"call_status": {"$nin": ["", None]}},
-                        {"recording_url": {"$nin": ["", None]}},
-                    ]
-                }
-            ]
-            if campaign and campaign != "all":
-                legacy_parts.append({"campaign_name": campaign})
-            if disposition and disposition != "all":
-                legacy_parts.append(_futwork_disposition_exact(canonical_disposition_label(disposition)))
-            if status and status != "all":
-                legacy_parts.append(
-                    {"$or": [{"call_status": {"$regex": f"^{status}$", "$options": "i"}}]}
-                )
-
-            sq = (q or "").strip()
-            if sq:
-                esc = re.escape(sq)
-                digits = re.sub(r"\D+", "", sq)
-                ors = [
-                    {"full_name": {"$regex": esc, "$options": "i"}},
-                    {"mobile": {"$regex": esc, "$options": "i"}},
-                    {"client_lead_id": {"$regex": esc, "$options": "i"}},
-                ]
-                if digits:
-                    ors.append({"mobile_digits": {"$regex": digits}})
-                legacy_parts.append({"$or": ors})
-
-            legacy_date = _legacy_lead_date_clause(start_date, end_date)
-            if legacy_date:
-                legacy_parts.append(legacy_date)
-
-            base_query = _and_queries(*legacy_parts)
-
-            total = await db.leads.count_documents(base_query)
-            leads_cursor = (
-                db.leads.find(base_query, {"_id": 0})
-                .sort("created_at", -1)
-                .skip(skip_n)
-                .limit(limit_n)
-            )
-            leads_data = await leads_cursor.to_list(limit_n)
-            has_more = skip_n + len(leads_data) < total
-
-            for lead in leads_data:
-                call_status = lead.get("call_status", "") or "completed"
-                campaign_name = lead.get("campaign_name", "") or "Default Campaign"
-                calls.append(
-                    {
-                        "id": lead.get("id", ""),
-                        "customer_name": _lead_display_name(lead),
-                        "phone": _display_phone(lead.get("mobile"), lead.get("mobile_digits")),
-                        "status": call_status,
-                        "disposition": lead.get("disposition", ""),
-                        "duration": int(lead.get("call_duration", 0) or 0),
-                        "recording_url": lead.get("recording_url", ""),
-                        "transcript": lead.get("transcript", ""),
-                        "created_at": serialize_datetime_utc(
-                            lead.get("call_date") or lead.get("created_at")
-                        ),
-                        "campaign": campaign_name,
-                        "lead_id": lead.get("id", ""),
-                        "direction": "outbound",
-                        "hangup_by": "bot",
-                    }
-                )
-
+        calls, total = await _fetch_filtered_calls(
+            db,
+            campaign=campaign,
+            status=status,
+            disposition=disposition,
+            q=q,
+            upload_batch_id=upload_batch_id,
+            leadId=leadId,
+            mobile_digits=mobile_digits,
+            start_date=start_date,
+            end_date=end_date,
+            agent_id=agent_id,
+            skip_n=skip_n,
+            limit_n=limit_n,
+        )
+        has_more = skip_n + len(calls) < total
         return {
             "calls": calls,
             "total": total,
-            "page": effective_page,
-            "size": effective_size,
+            "page": page if not use_legacy_pagination else 1,
+            "size": limit_n if use_legacy_pagination else size,
             "has_more": has_more,
         }
     except Exception as e:

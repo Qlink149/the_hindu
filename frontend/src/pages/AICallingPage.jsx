@@ -16,6 +16,8 @@ import {
   Sparkles,
   Calendar,
   X,
+  Download,
+  Loader2,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -36,7 +38,7 @@ import {
   CALL_TABLE_GRID_COLS,
 } from "../components/feedback/Skeletons";
 import LoadingOverlay from "../components/loading/LoadingOverlay";
-import { api, campaignsAPI } from "../lib/api";
+import { api, campaignsAPI, downloadAuthenticatedFile } from "../lib/api";
 import AgentSelect from "../components/shared/AgentSelect";
 import TestCallControls from "../components/shared/TestCallControls";
 import { useCallingAgents } from "../hooks/useCallingAgents";
@@ -266,6 +268,7 @@ const AICallingPage = () => {
   const [hasMore, setHasMore] = useState(false);
   const [summary, setSummary] = useState(null);
   const [dateRange, setDateRange] = useState(null);
+  const [exporting, setExporting] = useState(false);
   const {
     agents,
     selectedId: selectedAgentId,
@@ -529,6 +532,27 @@ const AICallingPage = () => {
     setDateRange(null);
   }, []);
 
+  const handleExport = useCallback(async () => {
+    flushSearch();
+    setExporting(true);
+    try {
+      const params = { ...listParams(1) };
+      delete params.page;
+      delete params.size;
+      const typed = searchQuery.trim();
+      if (typed.length >= 2) params.q = typed;
+      else delete params.q;
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadAuthenticatedFile("/call-history/export", `ai-calling-${stamp}.csv`, params);
+      toast.success("Export downloaded");
+    } catch (error) {
+      console.error(error);
+      toast.error(error?.message || "Failed to export calls");
+    } finally {
+      setExporting(false);
+    }
+  }, [flushSearch, listParams, searchQuery]);
+
   // -------- Virtualizer --------
   const virtualizer = useVirtualizer({
     count: calls.length,
@@ -732,6 +756,22 @@ const AICallingPage = () => {
                     className="pl-10 bg-[#1A1A1A] border-white/10 text-white placeholder:text-[#525252] focus-visible:ring-[#C5A059]/40 focus-visible:border-[#C5A059]/40"
                   />
                 </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleExport}
+                  disabled={exporting}
+                  className="ml-auto bg-[#1A1A1A] border-white/10 text-white hover:bg-[#C5A059]/10 hover:text-[#C5A059] hover:border-[#C5A059]/40 gap-2"
+                  data-testid="ai-calling-export-btn"
+                >
+                  {exporting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  {exporting ? "Exporting…" : "Export"}
+                </Button>
               </div>
             </motion.div>
 

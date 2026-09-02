@@ -82,8 +82,8 @@ export const marketingAPI = {
  * @param {string} url - Path relative to api baseURL (e.g. /campaigns/.../download-original)
  * @param {string} filename - Suggested download filename
  */
-export async function downloadAuthenticatedFile(url, filename) {
-  const res = await api.get(url, { responseType: "blob" });
+export async function downloadAuthenticatedFile(url, filename, params) {
+  const res = await api.get(url, { responseType: "blob", params });
   const blob = res.data;
   const contentType = (res.headers["content-type"] || "").toLowerCase();
 
