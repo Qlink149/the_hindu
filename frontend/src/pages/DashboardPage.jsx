@@ -17,12 +17,10 @@ import {
   Crown,
   Flame,
   CheckCircle,
-  TrendingDown,
   Calendar,
   ChevronDown,
   Info,
   Building,
-  Sun,
 } from "lucide-react";
 import {
   PieChart,
@@ -47,7 +45,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../components/ui/tooltip";
-import { IDAC_DISPOSITIONS } from "../lib/idacDispositions";
 import { isFeatureLocked, SHOW_PROJECT_DISTRIBUTION, navigateToVirtualCustomer } from "../lib/featureAccess";
 import AgentSelect from "../components/shared/AgentSelect";
 import { useCallingAgents } from "../hooks/useCallingAgents";
@@ -410,29 +407,6 @@ const DashboardPage = () => {
                   <p className="text-[#A1A1AA] text-sm">Total Calls</p>
                   <p className="font-serif text-3xl text-white mt-1 tabular-nums truncate" title={String(displayStat("total_calls"))}>{displayStat("total_calls")}</p>
                 </div>
-              </motion.div>
-
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.25 }}
-                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4"
-              >
-                {IDAC_DISPOSITIONS.map((disp) => (
-                  <div
-                    key={disp.key}
-                    className={`glass-card rounded-lg p-4 border-l-4 ${disp.borderClass} ${statTileInteractive}`}
-                    data-testid={`${disp.label.toLowerCase().replace(/\s+/g, "-")}-tile`}
-                    {...dispositionTileProps(disp.filterKey)}
-                  >
-                    <p className="text-[#A1A1AA] text-xs uppercase tracking-wider truncate" title={disp.label}>
-                      {disp.label}
-                    </p>
-                    <p className="font-serif text-2xl text-white mt-2 tabular-nums">
-                      {displayStat(disp.statKey)}
-                    </p>
-                  </div>
-                ))}
               </motion.div>
 
               <div className="grid grid-cols-1 gap-6">
