@@ -479,22 +479,6 @@ const CampaignsPage = () => {
               </div>
             </div>
             <div className="flex flex-col items-stretch gap-3 sm:items-end">
-              <Button
-                variant="outline"
-                className="border-white/10 text-white hover:bg-white/5"
-                onClick={() => {
-                  const latest = uploadHistory[0];
-                  navigate(
-                    buildAICallingPath({
-                      uploadBatchId: latest?.id,
-                      batchName: latest?.batch_name || latest?.filename,
-                    })
-                  );
-                }}
-              >
-                <PhoneCall className="h-4 w-4 mr-2" />
-                Call History
-              </Button>
               <TestCallControls compact disabled={!campaign.futwork_push_enabled} />
             </div>
           </div>
