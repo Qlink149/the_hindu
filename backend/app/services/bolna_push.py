@@ -119,9 +119,9 @@ async def record_outbound_call_placeholder(
         "from_number": e164_from_number(settings.BOLNA_FROM_PHONE),
         "hangup_by": "bot",
         "created_at": now,
-        "updated_at": now,
     }
     try:
+        # Mongo forbids the same field in $set and $setOnInsert on upsert.
         await db.call_history.update_one(
             {"id": eid},
             {"$setOnInsert": insert_doc, "$set": {"updated_at": now}},
