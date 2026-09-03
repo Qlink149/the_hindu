@@ -98,8 +98,12 @@ async def set_current_campaign_agent(
 
         agents = await list_bolna_agents()
         match = next((a for a in agents if a.get("id") == payload.agent_id.strip()), None)
+        if not match:
+            raise HTTPException(status_code=400, detail="Unknown calling agent")
         name = (match or {}).get("name") or ""
         return await service.set_current_agent(payload.agent_id, name)
+    except HTTPException:
+        raise
     except ValueError as e:
         if str(e) == "campaign_not_found":
             raise HTTPException(status_code=404, detail="No campaign found")
@@ -114,14 +118,16 @@ async def place_test_call(
     payload: TestCallRequest,
     db=Depends(get_db),
 ):
-    """Place one outbound Bolna call using the currently selected agent."""
+    """Place one outbound Bolna call. agent_id chooses which Hindu agent dials."""
     service = CampaignService(db)
     try:
-        return await service.place_test_call(payload.phone)
+        return await service.place_test_call(payload.phone, agent_id=payload.agent_id or "")
     except ValueError as e:
         code = str(e)
         if code == "calling_engine_not_configured":
             raise HTTPException(status_code=503, detail="Calling Engine is not configured on the server")
+        if code == "unknown_agent":
+            raise HTTPException(status_code=400, detail="Choose a valid calling agent")
         if code == "invalid_phone":
             raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number")
         if code == "call_failed":

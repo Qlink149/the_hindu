@@ -138,6 +138,7 @@ class CampaignAgentUpdate(BaseModel):
 
 class TestCallRequest(BaseModel):
     phone: str = Field(..., min_length=8, max_length=20)
+    agent_id: Optional[str] = Field(default="", max_length=128)
 
 
 class LeadUploadBatchRename(BaseModel):

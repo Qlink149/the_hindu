@@ -29,12 +29,16 @@ AGENT_NAME_MAP = {
 def resolve_agent_name(agent_id: str) -> str:
     """Best-effort friendly name for an agent id.
 
+    Hindu allowlisted Bolna agents use ``display_name_for_agent``.
     Internal slugs (e.g. ``sales-closer``) come from ``AGENT_NAME_MAP``.
-    Futwork-issued ObjectIds (24 hex chars) get a short, deterministic label
-    so the campaign info card never shows a raw 24-char hash.
     """
     if not agent_id:
         return ""
+    from .bolna_agents import display_name_for_agent
+
+    listed = display_name_for_agent(agent_id)
+    if listed and listed != agent_id:
+        return listed
     mapped = AGENT_NAME_MAP.get(agent_id)
     if mapped:
         return mapped
@@ -240,9 +244,14 @@ class CampaignService:
         self.sanitize_campaign_for_response(doc)
         return self.build_current_response(doc)
 
-    async def place_test_call(self, phone: str) -> Dict[str, Any]:
+    async def place_test_call(self, phone: str, agent_id: str = "") -> Dict[str, Any]:
         if not settings.bolna_enabled:
             raise ValueError("calling_engine_not_configured")
+        from .bolna_agents import is_allowed_agent_id
+
+        requested = (agent_id or "").strip()
+        if requested and not is_allowed_agent_id(requested):
+            raise ValueError("unknown_agent")
         doc = await self.find_campaign_by_futwork_settings()
         campaign_id = str((doc or {}).get("id") or "") or None
         digits = "".join(c for c in str(phone or "") if c.isdigit())[-10:]
@@ -266,6 +275,7 @@ class CampaignService:
                 self.db,
                 lead,
                 campaign_id=campaign_id,
+                agent_id=requested or None,
             )
         if not ok:
             raise ValueError("call_failed")
@@ -273,6 +283,7 @@ class CampaignService:
             "status": "queued",
             "execution_id": execution_id or "",
             "phone": digits,
+            "agent_id": requested,
         }
 
     _FUTWORK_HISTORY_FILTER: Dict[str, Any] = {

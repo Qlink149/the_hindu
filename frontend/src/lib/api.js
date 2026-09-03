@@ -118,7 +118,11 @@ export const campaignsAPI = {
   startBulkFutworkPush: (data) =>
     api.post("/campaigns/current/bulk-futwork-push", data),
   setAgent: (agent_id) => api.patch("/campaigns/current/agent", { agent_id }),
-  placeTestCall: (phone) => api.post("/campaigns/current/test-call", { phone }),
+  placeTestCall: (phone, agent_id) =>
+    api.post("/campaigns/current/test-call", {
+      phone,
+      ...(agent_id ? { agent_id } : {}),
+    }),
 };
 
 export const agentsAPI = {
