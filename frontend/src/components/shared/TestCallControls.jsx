@@ -19,7 +19,9 @@ export default function TestCallControls({ disabled = false, compact = false }) 
 
   useEffect(() => {
     if (testAgentId || agentsLoading) return;
-    setTestAgentId(selectedId || agents[0]?.id || "");
+    setTestAgentId(
+      (selectedId && selectedId !== "all" ? selectedId : "") || agents[0]?.id || ""
+    );
   }, [agentsLoading, selectedId, agents, testAgentId]);
 
   const handleCall = async () => {

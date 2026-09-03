@@ -264,10 +264,7 @@ const AICallingPage = () => {
   const [exporting, setExporting] = useState(false);
   const {
     agents,
-    selectedId: selectedAgentId,
     loading: agentsLoading,
-    saving: agentsSaving,
-    selectAgent,
   } = useCallingAgents();
   const [agentFilter, setAgentFilter] = useState("all");
 
@@ -580,12 +577,12 @@ const AICallingPage = () => {
           </p>
           <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <AgentSelect
-              value={selectedAgentId}
-              onValueChange={selectAgent}
+              value={agentFilter}
+              onValueChange={(agentId) => setAgentFilter(agentId || "all")}
               agents={agents}
               loading={agentsLoading}
-              saving={agentsSaving}
-              placeholder="Select agent"
+              allowAll
+              placeholder="All agents"
             />
             <TestCallControls compact />
           </div>

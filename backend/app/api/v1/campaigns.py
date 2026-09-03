@@ -130,8 +130,12 @@ async def place_test_call(
             raise HTTPException(status_code=400, detail="Choose a valid calling agent")
         if code == "invalid_phone":
             raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number")
-        if code == "call_failed":
-            raise HTTPException(status_code=502, detail="Bolna rejected the call. Check agent, wallet, and number.")
+        if code == "call_failed" or code.startswith("bolna_rejected:"):
+            detail = code.split(":", 1)[1].strip() if code.startswith("bolna_rejected:") else ""
+            raise HTTPException(
+                status_code=502,
+                detail=detail or "Bolna rejected the call. Check agent, wallet, and number.",
+            )
         raise HTTPException(status_code=400, detail=code)
     except Exception:
         logger.exception("place_test_call failed")

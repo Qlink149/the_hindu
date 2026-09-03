@@ -9,7 +9,7 @@ import {
 } from "../ui/select";
 
 /**
- * Placeholder + dropdown to pick which Bolna voice agent places outbound calls.
+ * Placeholder + dropdown to pick a Bolna voice agent, or All agents on viewing surfaces.
  */
 export default function AgentSelect({
   value,

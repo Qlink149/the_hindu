@@ -270,7 +270,9 @@ class CampaignService:
                 "customer_name": "Test call",
             }
         async with httpx.AsyncClient(timeout=30.0) as http_client:
-            ok, execution_id = await post_one_lead_to_futwork(
+            from .bolna_push import post_one_lead_to_bolna
+
+            ok, execution_id, err = await post_one_lead_to_bolna(
                 http_client,
                 self.db,
                 lead,
@@ -278,7 +280,7 @@ class CampaignService:
                 agent_id=requested or None,
             )
         if not ok:
-            raise ValueError("call_failed")
+            raise ValueError(f"bolna_rejected:{err}" if err else "call_failed")
         return {
             "status": "queued",
             "execution_id": execution_id or "",

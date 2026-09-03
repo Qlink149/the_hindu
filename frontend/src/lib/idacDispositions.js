@@ -92,6 +92,8 @@ export function normalizeDispositionChartLabel(key) {
   return raw;
 }
 
+const BOLNA_CATEGORY_KEYS = ["Attending", "Not Attending", "General"];
+
 function nestedLeaf(extracted, ...path) {
   let node = extracted;
   for (const key of path) {
@@ -99,6 +101,19 @@ function nestedLeaf(extracted, ...path) {
     node = node[key];
   }
   return node && typeof node === "object" ? node : null;
+}
+
+function namedLeaf(extracted, leafName) {
+  for (const category of BOLNA_CATEGORY_KEYS) {
+    const node = nestedLeaf(extracted, category, leafName);
+    if (node) return node;
+  }
+  for (const group of Object.values(extracted || {})) {
+    if (group && typeof group === "object" && group[leafName] && typeof group[leafName] === "object") {
+      return group[leafName];
+    }
+  }
+  return null;
 }
 
 function leafConfidence(node) {
@@ -113,12 +128,8 @@ export function resolveCallDisposition(call) {
   const extracted = call?.extracted_data || call?.extractedData;
   if (!extracted || typeof extracted !== "object") return "";
 
-  const att =
-    nestedLeaf(extracted, "Attending", "Attending") ||
-    nestedLeaf(extracted, "General", "Attending");
-  const natt =
-    nestedLeaf(extracted, "Attending", "Not Attending") ||
-    nestedLeaf(extracted, "General", "Not Attending");
+  const att = namedLeaf(extracted, "Attending");
+  const natt = namedLeaf(extracted, "Not Attending");
   const attConf = leafConfidence(att);
   const nattConf = leafConfidence(natt);
   if (attConf >= 0.5 || nattConf >= 0.5) {

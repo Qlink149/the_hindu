@@ -86,9 +86,10 @@ async def post_one_lead_to_futwork(
     Returns (success, remote lead/execution id or None).
     """
     if settings.bolna_enabled:
-        return await post_one_lead_to_bolna(
+        ok, execution_id, _err = await post_one_lead_to_bolna(
             http_client, db, lead, campaign_id=campaign_id, agent_id=agent_id
         )
+        return ok, execution_id
 
     from .lead_service import LeadService
 

@@ -120,12 +120,10 @@ const DashboardPage = () => {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [timeFilter, setTimeFilter] = useState("all");
   const [dateRange, setDateRange] = useState(null);
+  const [statsAgentId, setStatsAgentId] = useState("all");
   const {
     agents,
-    selectedId: selectedAgentId,
     loading: agentsLoading,
-    saving: agentsSaving,
-    selectAgent,
   } = useCallingAgents();
 
   const timeFilters = [
@@ -137,10 +135,11 @@ const DashboardPage = () => {
   ];
 
   const fetchData = useCallback(async () => {
+    if (agentsLoading) return;
     setLoading(true);
     setError(null);
     try {
-      const params = buildStatsParams(timeFilter, "all", dateRange);
+      const params = buildStatsParams(timeFilter, "all", dateRange, statsAgentId);
       const [statsRes, projectsRes, ownersRes] = await Promise.all([
         api.get("/dashboard/stats", { params }),
         api.get("/dashboard/projects"),
@@ -159,7 +158,7 @@ const DashboardPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [timeFilter, dateRange]);
+  }, [timeFilter, dateRange, statsAgentId, agentsLoading]);
 
   useEffect(() => {
     fetchData();
@@ -205,7 +204,7 @@ const DashboardPage = () => {
       timeFilter,
       "all",
       dateRange,
-      selectedAgentId
+      statsAgentId
     );
     navigate(`/ai-calling?${params.toString()}`);
   };
@@ -217,7 +216,7 @@ const DashboardPage = () => {
       timeFilter,
       "all",
       dateRange,
-      selectedAgentId
+      statsAgentId
     );
     navigate(`/ai-calling?${params.toString()}`);
   };
@@ -254,12 +253,12 @@ const DashboardPage = () => {
         className="flex flex-wrap items-center gap-3"
       >
         <AgentSelect
-          value={selectedAgentId}
-          onValueChange={selectAgent}
+          value={statsAgentId}
+          onValueChange={(agentId) => setStatsAgentId(agentId || "all")}
           agents={agents}
           loading={agentsLoading}
-          saving={agentsSaving}
-          placeholder="Select agent"
+          allowAll
+          placeholder="All agents"
         />
 
         <DropdownMenu>

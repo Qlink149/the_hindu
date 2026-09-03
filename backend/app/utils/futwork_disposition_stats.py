@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from .bolna_disposition import bolna_confidence_paths, bolna_leaf_paths
+
 _IST = ZoneInfo("Asia/Kolkata")
 
 # Case-insensitive merge for known Futwork label variants.
@@ -115,6 +117,7 @@ def build_call_history_match_query(
     end_date: Optional[str] = None,
     lead_ids: Optional[List[str]] = None,
     mobile_digits_list: Optional[List[str]] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Mongo match for call_history aligned with dashboard filter params.
@@ -131,6 +134,10 @@ def build_call_history_match_query(
         date_clause = call_history_date_clause(start_date, end_date)
         if date_clause:
             parts.append(date_clause)
+
+    aid = (agent_id or "").strip()
+    if aid and aid != "all":
+        parts.append({"agent_id": aid})
 
     if lead_ids or mobile_digits_list:
         ors: List[Dict[str, Any]] = []
@@ -191,6 +198,7 @@ async def aggregate_futwork_disposition_stats(
     days: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, int]:
     """Group call_history by Futwork disposition (call-level, AI Calling source of truth)."""
     lead_ids: List[str] = []
@@ -207,6 +215,7 @@ async def aggregate_futwork_disposition_stats(
         end_date=end_date,
         lead_ids=lead_ids or None,
         mobile_digits_list=mobile_digits_list or None,
+        agent_id=agent_id,
     )
 
     pipeline: List[Dict[str, Any]] = []
@@ -231,29 +240,25 @@ async def aggregate_futwork_disposition_stats(
     return ordered
 
 
+def _if_null_chain(paths: List[str], default: Any = 0) -> Dict[str, Any]:
+    expr: Any = default
+    for path in reversed(paths):
+        expr = {"$ifNull": [f"${path}", expr]}
+    return expr
+
+
 def _coalesced_disposition_expr() -> Dict[str, Any]:
-    """Prefer stored disposition, then Bolna attendance leaves by confidence."""
+    """Prefer stored disposition, then Bolna attendance leaves by confidence.
+
+    Covers Pre Event (both leaves under Attending) and On Day 3.0
+    (Not Attending under its own category).
+    """
     return {
         "$let": {
             "vars": {
                 "direct": {"$ifNull": ["$disposition", ""]},
-                "attConf": {
-                    "$ifNull": [
-                        "$extracted_data.Attending.Attending.confidence",
-                        {"$ifNull": ["$extracted_data.General.Attending.confidence", 0]},
-                    ]
-                },
-                "nattConf": {
-                    "$ifNull": [
-                        "$extracted_data.Attending.Not Attending.confidence",
-                        {
-                            "$ifNull": [
-                                "$extracted_data.General.Not Attending.confidence",
-                                0,
-                            ]
-                        },
-                    ]
-                },
+                "attConf": _if_null_chain(list(bolna_confidence_paths("Attending"))),
+                "nattConf": _if_null_chain(list(bolna_confidence_paths("Not Attending"))),
             },
             "in": {
                 "$switch": {
@@ -307,20 +312,10 @@ def canonical_disposition_label(label: str) -> str:
     return raw
 
 
-# Nested Bolna extraction paths for The Hindu agent (Attending / Not Attending).
+# Nested Bolna extraction paths for Hindu Pre Event and On Day 3.0.
 _BOLNA_NESTED_DISPOSITION_PATHS: Dict[str, List[str]] = {
-    "Attending": [
-        "extracted_data.Attending.Attending.objective",
-        "extracted_data.Attending.Attending.value",
-        "extracted_data.General.Attending.objective",
-        "extracted_data.General.Attending.value",
-    ],
-    "Not Attending": [
-        "extracted_data.Attending.Not Attending.objective",
-        "extracted_data.Attending.Not Attending.value",
-        "extracted_data.General.Not Attending.objective",
-        "extracted_data.General.Not Attending.value",
-    ],
+    "Attending": list(bolna_leaf_paths("Attending")),
+    "Not Attending": list(bolna_leaf_paths("Not Attending")),
 }
 
 
@@ -362,6 +357,7 @@ async def aggregate_avg_duration_by_disposition(
     days: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, float]:
     """Group call_history by Futwork disposition and compute average duration."""
     lead_ids: List[str] = []
@@ -378,6 +374,7 @@ async def aggregate_avg_duration_by_disposition(
         end_date=end_date,
         lead_ids=lead_ids or None,
         mobile_digits_list=mobile_digits_list or None,
+        agent_id=agent_id,
     )
 
     pipeline: List[Dict[str, Any]] = []

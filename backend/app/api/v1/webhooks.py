@@ -228,7 +228,7 @@ def normalize_bolna_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         "callSid": execution_id,
         "leadId": lead_id,
         "campaignId": campaign_id,
-        "agentId": _first_str(raw.get("agent_id"), raw.get("agentId"), settings.BOLNA_AGENT_ID),
+        "agentId": _first_str(raw.get("agent_id"), raw.get("agentId")),
         "status": _first_str(raw.get("status")),
         "transcript": raw.get("transcript") or "",
         "disposition": extract_bolna_disposition(extracted),
@@ -377,7 +377,6 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
         "call_sid":         call_sid,
         "lead_id":          internal_lead_id,
         "campaign_id":      campaign_id,
-        "agent_id":         agent_id,
         "phone":            raw_phone,
         "mobile_digits":    mobile_digits,
         "customer_name":    customer_name,
@@ -388,6 +387,8 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
         "provider_call_id": provider_call_id,
         "updated_at":       utc_now(),
     }
+    if agent_id:
+        set_fields["agent_id"] = agent_id
     if webhook_futwork_id:
         set_fields["futwork_lead_id"] = webhook_futwork_id
     upload_batch_id = _first_str(

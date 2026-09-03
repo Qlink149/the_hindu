@@ -1,7 +1,20 @@
-"""Resolve Attending / Not Attending from Bolna extracted_data."""
+"""Resolve Attending / Not Attending from Bolna extracted_data.
+
+Hindu- Pre Event nests both leaves under category ``Attending``:
+
+    extracted_data.Attending.Attending
+    extracted_data.Attending.Not Attending
+
+Hindu On Day Version 3.0 uses matching category names for the same questions:
+
+    extracted_data.Attending.Attending
+    extracted_data.Not Attending.Not Attending
+
+Both also keep Call Summary under ``General``.
+"""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 _BOLNA_LEAF_VALUE_KEYS = ("objective", "value", "label")
 _BOLNA_DIRECT_DISPOSITION_KEYS = (
@@ -15,6 +28,9 @@ _BOLNA_ATTENDANCE_VALUES = {
     "not attending": "Not Attending",
     "not-attending": "Not Attending",
 }
+
+# Category keys Bolna has used for the Hindu attendance extractions.
+_BOLNA_CATEGORY_KEYS = ("Attending", "Not Attending", "General")
 
 _NOT_ATTENDING_HINTS = (
     "will not attend",
@@ -61,6 +77,40 @@ def _nested_dict(extracted: Any, *path: str) -> Dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
+def _find_named_leaf(extracted: Any, leaf_name: str) -> Dict[str, Any]:
+    """Find an extraction leaf by name under known or arbitrary categories."""
+    if not isinstance(extracted, dict):
+        return {}
+    for category in _BOLNA_CATEGORY_KEYS:
+        node = _nested_dict(extracted, category, leaf_name)
+        if node:
+            return node
+    for group in extracted.values():
+        if not isinstance(group, dict):
+            continue
+        node = group.get(leaf_name)
+        if isinstance(node, dict):
+            return node
+    return {}
+
+
+def bolna_leaf_paths(leaf_name: str) -> Tuple[str, ...]:
+    """Dotted Mongo paths for a named Bolna extraction leaf (objective/value)."""
+    paths = []
+    for category in _BOLNA_CATEGORY_KEYS:
+        prefix = f"extracted_data.{category}.{leaf_name}"
+        paths.append(f"{prefix}.objective")
+        paths.append(f"{prefix}.value")
+    return tuple(paths)
+
+
+def bolna_confidence_paths(leaf_name: str) -> Tuple[str, ...]:
+    return tuple(
+        f"extracted_data.{category}.{leaf_name}.confidence"
+        for category in _BOLNA_CATEGORY_KEYS
+    )
+
+
 def extract_bolna_disposition(extracted: Any) -> str:
     """Pick Attending / Not Attending using confidence, not the first matching leaf.
 
@@ -73,12 +123,8 @@ def extract_bolna_disposition(extracted: Any) -> str:
         if text:
             return _BOLNA_ATTENDANCE_VALUES.get(text.lower(), text)
 
-    att = _nested_dict(extracted, "Attending", "Attending") or _nested_dict(
-        extracted, "General", "Attending"
-    )
-    natt = _nested_dict(extracted, "Attending", "Not Attending") or _nested_dict(
-        extracted, "General", "Not Attending"
-    )
+    att = _find_named_leaf(extracted, "Attending")
+    natt = _find_named_leaf(extracted, "Not Attending")
     att_conf = _as_confidence(att.get("confidence"))
     natt_conf = _as_confidence(natt.get("confidence"))
 

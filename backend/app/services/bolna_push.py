@@ -149,6 +149,25 @@ def bolna_user_data(lead: Dict[str, Any], customer_name: str) -> Dict[str, str]:
     return data
 
 
+def extract_bolna_error_message(response: Optional[httpx.Response]) -> str:
+    if response is None:
+        return ""
+    try:
+        body = response.json()
+    except Exception:
+        return (response.text or "").strip()[:300]
+    if isinstance(body, dict):
+        for key in ("message", "detail", "error"):
+            val = body.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()[:400]
+            if isinstance(val, dict) and val.get("message"):
+                return str(val.get("message")).strip()[:400]
+    if isinstance(body, str) and body.strip():
+        return body.strip()[:400]
+    return (response.text or "").strip()[:300]
+
+
 def extract_bolna_execution_id(body: Any) -> str:
     if not isinstance(body, dict):
         return ""
@@ -203,11 +222,11 @@ async def post_one_lead_to_bolna(
     *,
     campaign_id: Optional[str] = None,
     agent_id: Optional[str] = None,
-) -> Tuple[bool, Optional[str]]:
+) -> Tuple[bool, Optional[str], str]:
     """
     POST one outbound call to Bolna and persist sync status on the lead.
 
-    Returns (success, execution_id or None).
+    Returns (success, execution_id or None, error message).
     """
     from .lead_service import LeadService
 
@@ -219,7 +238,7 @@ async def post_one_lead_to_bolna(
             "Skipping lead: invalid phone for Bolna dial | mobile_digits=%s",
             lead.get("mobile_digits"),
         )
-        return False, None
+        return False, None, "Invalid phone number"
 
     name = display_name_for_lead(lead)
     resolved_agent = (agent_id or "").strip() or await resolve_outbound_agent_id(
@@ -227,7 +246,7 @@ async def post_one_lead_to_bolna(
     )
     if not resolved_agent:
         logger.warning("Skipping lead: no Bolna agent_id configured")
-        return False, None
+        return False, None, "No calling agent configured"
     payload: Dict[str, Any] = {
         "agent_id": resolved_agent,
         "recipient_phone_number": recipient,
@@ -272,8 +291,9 @@ async def post_one_lead_to_bolna(
                 agent_id=resolved_agent,
                 campaign_id=campaign_id,
             )
-        return True, execution_id or None
+        return True, execution_id or None, ""
     except httpx.HTTPStatusError as e:
+        err = extract_bolna_error_message(e.response)
         logger.error(
             "Failed to push lead %s to Bolna | HTTPStatusError: %s | Response Body: %s",
             phone10,
@@ -286,7 +306,7 @@ async def post_one_lead_to_bolna(
             status="failed",
             campaign_id=campaign_id,
         )
-        return False, None
+        return False, None, err or "Bolna rejected the call"
     except Exception as e:
         logger.error("Failed to push lead %s to Bolna: %s", phone10, e, exc_info=True)
         await ls.apply_lead_futwork_sync(
@@ -294,4 +314,4 @@ async def post_one_lead_to_bolna(
             status="failed",
             campaign_id=campaign_id,
         )
-        return False, None
+        return False, None, "Could not reach Bolna"

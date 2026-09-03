@@ -162,7 +162,7 @@ export function buildAICallingDrillParams(
 ) {
   const params = new URLSearchParams();
   if (disposition) params.set("disposition", disposition);
-  if (agentId) params.set("agent_id", agentId);
+  if (agentId && agentId !== "all") params.set("agent_id", agentId);
   const statsParams = buildStatsParams(timeFilter, projectFilter, dateRange);
   if (statsParams.start_date) params.set("start_date", statsParams.start_date);
   if (statsParams.end_date) params.set("end_date", statsParams.end_date);
@@ -192,7 +192,7 @@ export const DASHBOARD_BUCKET_LABELS = {
   warm: "Warm Leads",
 };
 
-export function buildStatsParams(timeFilter, projectFilter, dateRange) {
+export function buildStatsParams(timeFilter, projectFilter, dateRange, agentId) {
   const params = {};
   if (projectFilter && projectFilter !== "all") {
     params.project =
@@ -206,6 +206,9 @@ export function buildStatsParams(timeFilter, projectFilter, dateRange) {
     const to = dateRange.to || dateRange.from;
     params.start_date = from.toISOString().slice(0, 10);
     params.end_date = to.toISOString().slice(0, 10);
+  }
+  if (agentId && agentId !== "all") {
+    params.agent_id = agentId;
   }
   return params;
 }

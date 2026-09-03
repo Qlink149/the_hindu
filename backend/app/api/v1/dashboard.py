@@ -35,6 +35,7 @@ async def get_dashboard_stats(
     days: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    agent_id: Optional[str] = None,
     db=Depends(get_db),
 ):
     base_query = build_base_query(project, days, start_date, end_date)
@@ -83,6 +84,7 @@ async def get_dashboard_stats(
         days=days,
         start_date=start_date,
         end_date=end_date,
+        agent_id=agent_id,
     )
     
     disposition_avg_duration = await aggregate_avg_duration_by_disposition(
@@ -91,6 +93,7 @@ async def get_dashboard_stats(
         days=days,
         start_date=start_date,
         end_date=end_date,
+        agent_id=agent_id,
     )
 
     lead_ids, mobile_digits_list = [], []
@@ -104,6 +107,7 @@ async def get_dashboard_stats(
         end_date=end_date,
         lead_ids=lead_ids or None,
         mobile_digits_list=mobile_digits_list or None,
+        agent_id=agent_id,
     )
     
     total_calls = await db.call_history.count_documents(ch_query)
