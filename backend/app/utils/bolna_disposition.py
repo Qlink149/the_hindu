@@ -14,6 +14,7 @@ Both also keep Call Summary under ``General``.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Tuple
 
 _BOLNA_LEAF_VALUE_KEYS = ("objective", "value", "label")
@@ -47,6 +48,102 @@ _ATTENDING_HINTS = (
     "user expressed interest",
     "user confirmed",
 )
+
+# Client-review ranking: real 40s+ conversations first, short/weak labels below.
+LISTEN_MIN_DURATION_SECONDS = 40
+_INVITE_TURN_RE = re.compile(
+    r"interested in attending|are you interested in attending|would you be attending|"
+    r"include hona|aane mein ruchi",
+    re.I,
+)
+_CONFIRM_TURN_RE = re.compile(
+    r"\b(yes|yeah|yep|yup|haan|sure|okay|ok|i will|i'll come|i can come|coming|"
+    r"aaunga|aaungi|aaenge|definitely|interested|will attend|will come|attending|"
+    r"send .{0,24}(link|details)|whatsapp|ticket|register|book)\b",
+    re.I,
+)
+_DECLINE_TURN_RE = re.compile(
+    r"\b(no|not interested|nahi|won't|wont|cannot|can't|not coming|not attending|"
+    r"don't want|do not want)\b",
+    re.I,
+)
+_ASK_TURN_HINTS = (
+    "whatsapp",
+    "ticket",
+    "register",
+    "booking",
+    "link",
+    "details",
+    "i can come",
+    "i will come",
+    "i'll come",
+)
+
+
+def is_attendance_disposition(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"attending", "not attending", "not-attending"}
+
+
+def _user_turns_after_invite(transcript: Any) -> list[str]:
+    after: list[str] = []
+    seen_invite = False
+    for raw_line in str(transcript or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _INVITE_TURN_RE.search(line):
+            seen_invite = True
+        low = line.lower()
+        if not (low.startswith("user:") or low.startswith("customer:")):
+            continue
+        text = re.sub(r"^(user|customer)\s*:\s*", "", line, flags=re.I).strip()
+        if seen_invite and text:
+            after.append(text)
+    return after
+
+
+def _user_turn_count(transcript: Any) -> int:
+    n = 0
+    for raw_line in str(transcript or "").splitlines():
+        low = raw_line.strip().lower()
+        if low.startswith("user:") or low.startswith("customer:"):
+            n += 1
+    return n
+
+
+def call_match_quality(doc: Any) -> str:
+    """``strong`` = 40s+ transcript with a real yes/no after the invite; else ``review``."""
+    if not isinstance(doc, dict):
+        return "review"
+    try:
+        duration = int(doc.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if duration < LISTEN_MIN_DURATION_SECONDS:
+        return "review"
+
+    after = _user_turns_after_invite(doc.get("transcript"))
+    after_text = " ".join(after).lower()
+    stored = str(doc.get("disposition") or "").strip()
+    extracted = doc.get("extracted_data") or doc.get("extractedData")
+    label = stored or extract_bolna_disposition(extracted)
+    key = label.lower().replace("_", " ").replace("-", " ")
+
+    if key == "attending":
+        asked = any(hint in after_text for hint in _ASK_TURN_HINTS)
+        confirmed = bool(_CONFIRM_TURN_RE.search(after_text))
+        if asked or confirmed:
+            return "strong"
+        if duration >= 50 and (_user_turn_count(doc.get("transcript")) >= 3 or len(after) >= 2):
+            return "strong"
+        return "review"
+
+    if key == "not attending":
+        if _DECLINE_TURN_RE.search(after_text) or "not interested" in after_text:
+            return "strong"
+        return "review"
+
+    return "review"
 
 
 def _leaf_text(node: Any) -> str:

@@ -35,9 +35,15 @@ from app.api.v1 import (
 )
 from app.models.structured_extraction import StructuredDisposition
 from app.services.campaign_service import CampaignService
-from app.utils.futwork_disposition_stats import futwork_disposition_exact as _futwork_disposition_exact
-from app.utils.futwork_disposition_stats import canonical_disposition_label
-from app.utils.bolna_disposition import extract_bolna_disposition
+from app.utils.futwork_disposition_stats import (
+    attendance_match_quality_expr,
+    canonical_disposition_label,
+    futwork_disposition_exact as _futwork_disposition_exact,
+)
+from app.utils.bolna_disposition import (
+    call_match_quality,
+    extract_bolna_disposition,
+)
 from app.utils.webhook_lead import is_placeholder_customer_name
 
 AGENT_ACTIVE_DISPOSITIONS = ["Attending", "Not Attending"]
@@ -362,6 +368,32 @@ def _value_in_date_range(
     return True
 
 
+def _quality_counts_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    strong = sum(1 for r in rows if r.get("match_quality") == "strong")
+    return {"strong": strong, "review": max(0, len(rows) - strong)}
+
+
+async def _attendance_quality_counts(db, ch_query: Dict[str, Any]) -> Dict[str, int]:
+    pipeline: List[Dict[str, Any]] = []
+    if ch_query:
+        pipeline.append({"$match": ch_query})
+    pipeline.extend(
+        [
+            {"$addFields": {"_q": attendance_match_quality_expr()}},
+            {"$group": {"_id": "$_q", "count": {"$sum": 1}}},
+        ]
+    )
+    rows = await db.call_history.aggregate(pipeline).to_list(length=8)
+    out = {"strong": 0, "review": 0}
+    for row in rows:
+        count = int(row.get("count") or 0)
+        if row.get("_id") == 1:
+            out["strong"] += count
+        else:
+            out["review"] += count
+    return out
+
+
 def _call_history_filter_query(
     campaign: Optional[str],
     status: Optional[str],
@@ -493,6 +525,7 @@ def _doc_to_call_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "upload_batch_id": doc.get("upload_batch_id") or "",
         "upload_batch_name": doc.get("upload_batch_name") or "",
         "call_sid": doc.get("call_sid") or doc.get("id") or "",
+        "match_quality": call_match_quality(doc),
     }
 
 
@@ -517,6 +550,7 @@ def _lead_to_placeholder_row(lead: Dict[str, Any]) -> Dict[str, Any]:
         "upload_batch_id": lead.get("upload_batch_id") or "",
         "upload_batch_name": lead.get("upload_batch_name") or "",
         "call_sid": "",
+        "match_quality": call_match_quality(lead),
     }
 
 
@@ -602,7 +636,7 @@ async def _list_batch_lead_call_rows(
     agent_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-) -> tuple[List[Dict[str, Any]], int]:
+) -> tuple[List[Dict[str, Any]], int, Dict[str, int]]:
     """One row per lead in the upload batch, joined to the latest call."""
     uid = (upload_batch_id or "").strip()
     lead_parts: List[Dict[str, Any]] = [{"upload_batch_id": uid}]
@@ -762,9 +796,19 @@ async def _list_batch_lead_call_rows(
                 continue
         rows.append(row)
 
+    rows.sort(
+        key=lambda r: (
+            r.get("match_quality") == "strong",
+            int(r.get("duration") or 0),
+            str(r.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+
     total = len(rows)
+    quality_counts = _quality_counts_from_rows(rows)
     page_rows = rows[skip_n : skip_n + limit_n]
-    return page_rows, total
+    return page_rows, total, quality_counts
 
 
 @app.get("/api/call-history/filters", dependencies=_auth_dep)
@@ -1055,7 +1099,7 @@ async def _fetch_filtered_calls(
     agent_id: Optional[str],
     skip_n: int,
     limit_n: int,
-) -> tuple[List[Dict[str, Any]], int]:
+) -> tuple[List[Dict[str, Any]], int, Dict[str, int]]:
     """Same matching rules as the AI Calling list, for one page or a full export."""
     lead_clause = await _call_history_lead_id_clause(db, leadId) if leadId else None
     batch_clause = await _upload_batch_call_clause(db, upload_batch_id)
@@ -1075,12 +1119,13 @@ async def _fetch_filtered_calls(
 
     calls: List[Dict[str, Any]] = []
     total = 0
+    quality_counts: Dict[str, int] = {}
     call_history_collection_used = await db.call_history.count_documents({}) > 0
     uid = (upload_batch_id or "").strip()
     use_batch_leads = bool(uid) and uid != "all" and not leadId
 
     if use_batch_leads:
-        calls, total = await _list_batch_lead_call_rows(
+        calls, total, quality_counts = await _list_batch_lead_call_rows(
             db,
             upload_batch_id=uid,
             status=status,
@@ -1092,21 +1137,28 @@ async def _fetch_filtered_calls(
             start_date=start_date,
             end_date=end_date,
         )
-        return calls, total
+        return calls, total, quality_counts
 
     if call_history_collection_used:
         total = await db.call_history.count_documents(ch_query)
-        ch_docs = await (
-            db.call_history.find(ch_query, {"_id": 0})
-            .sort("created_at", -1)
-            .skip(skip_n)
-            .limit(limit_n)
-            .to_list(limit_n)
+        quality_counts = await _attendance_quality_counts(db, ch_query)
+        pipeline: List[Dict[str, Any]] = []
+        if ch_query:
+            pipeline.append({"$match": ch_query})
+        pipeline.extend(
+            [
+                {"$addFields": {"_match_quality": attendance_match_quality_expr()}},
+                {"$sort": {"_match_quality": -1, "duration": -1, "created_at": -1}},
+                {"$skip": skip_n},
+                {"$limit": limit_n},
+                {"$project": {"_id": 0, "_match_quality": 0}},
+            ]
         )
+        ch_docs = await db.call_history.aggregate(pipeline).to_list(length=limit_n)
         for doc in ch_docs:
             calls.append(_doc_to_call_row(doc))
         calls = await _enrich_call_rows_from_leads(db, calls)
-        return calls, total
+        return calls, total, quality_counts
 
     legacy_parts: List[Dict[str, Any]] = [
         {
@@ -1171,9 +1223,19 @@ async def _fetch_filtered_calls(
                 "lead_id": lead.get("id", ""),
                 "direction": "outbound",
                 "hangup_by": "bot",
+                "match_quality": call_match_quality(lead),
             }
         )
-    return calls, total
+    calls.sort(
+        key=lambda r: (
+            r.get("match_quality") == "strong",
+            int(r.get("duration") or 0),
+            str(r.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+    quality_counts = _quality_counts_from_rows(calls)
+    return calls, total, quality_counts
 
 
 def _call_history_csv_bytes(rows: List[Dict[str, Any]]) -> bytes:
@@ -1204,7 +1266,7 @@ async def export_call_history(
 ):
     """CSV of every call matching the same filters as GET /api/call-history."""
     try:
-        calls, _total = await _fetch_filtered_calls(
+        calls, _total, _meta = await _fetch_filtered_calls(
             db,
             campaign=campaign,
             status=status,
@@ -1265,7 +1327,7 @@ async def get_call_history(
             skip_n = (page - 1) * size
             limit_n = size
 
-        calls, total = await _fetch_filtered_calls(
+        calls, total, quality_counts = await _fetch_filtered_calls(
             db,
             campaign=campaign,
             status=status,
@@ -1287,6 +1349,7 @@ async def get_call_history(
             "page": page if not use_legacy_pagination else 1,
             "size": limit_n if use_legacy_pagination else size,
             "has_more": has_more,
+            "quality_counts": quality_counts or None,
         }
     except Exception as e:
         logger.error(f"Error fetching call history: {e}")

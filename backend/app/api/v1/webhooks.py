@@ -16,7 +16,7 @@ from ...utils.csv_processor import normalize_phone
 from ...utils.lead_qualification_tags import apply_canonical_tags_to_lead_patch
 from ...utils.context_updates import persist_lead_context_updates
 from ...utils.orphan_call_link import ensure_lead_for_unmatched_webhook
-from ...utils.bolna_disposition import extract_bolna_disposition
+from ...utils.bolna_disposition import call_match_quality, extract_bolna_disposition
 from ...utils.webhook_lead import (
     call_history_lead_id_value,
     has_webhook_id_hints,
@@ -434,6 +434,8 @@ async def _process_calling_webhook(data: Dict[str, Any], db, request: Request):
     if transcript:                 set_fields["transcript"]     = transcript
     if disposition:                set_fields["disposition"]    = disposition
     if extracted_data is not None: set_fields["extracted_data"] = extracted_data
+    quality_probe = {**(prev_call or {}), **set_fields}
+    set_fields["listen_quality"] = call_match_quality(quality_probe)
 
     await db.call_history.update_one(
         {"id": call_sid},

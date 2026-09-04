@@ -247,6 +247,17 @@ def _if_null_chain(paths: List[str], default: Any = 0) -> Dict[str, Any]:
     return expr
 
 
+def attendance_match_quality_expr() -> Dict[str, Any]:
+    """1 = 40s+ transcript-confirmed call, 0 = weaker attending/not-attending label."""
+    return {
+        "$cond": [
+            {"$eq": [{"$ifNull": ["$listen_quality", ""]}, "strong"]},
+            1,
+            0,
+        ]
+    }
+
+
 def _coalesced_disposition_expr() -> Dict[str, Any]:
     """Prefer stored disposition, then Bolna attendance leaves by confidence.
 
